@@ -1,4 +1,5 @@
-import { DAY_MS, markLostRuns, PURGE_BATCH, purgeOldRuns, retentionDays, statsRetentionDays } from '../domain/runs-repo'
+import { DAY_MS, markLostRuns, PURGE_BATCH, purgeOldRuns } from '../domain/runs-repo'
+import { getRuntimeSettings } from '../domain/settings'
 import { purgeOldStats } from '../domain/stats-repo'
 import { syncScheduler } from '../domain/task-service'
 import { listAllTasks } from '../domain/tasks-repo'
@@ -20,10 +21,10 @@ export interface MaintenanceReport {
 /**
  * Runs on the 5-minute cron: replay D1 state into every DO (re-arming lost alarms,
  * finishing interrupted once-task disables), close out lost runs and purge
- * runs older than RUN_RETENTION_DAYS and statistics older than STATS_RETENTION_DAYS.
+ * logs and statistics older than the retention periods saved in runtime settings.
  */
 export async function runMaintenance(env: CloudflareBindings, now = Date.now()): Promise<MaintenanceReport> {
-  const tasks = await listAllTasks(env.DB)
+  const [tasks, settings] = await Promise.all([listAllTasks(env.DB), getRuntimeSettings(env.DB)])
   let syncFailures = 0
   for (let i = 0; i < tasks.length; i += SYNC_CONCURRENCY) {
     const results = await Promise.all(tasks.slice(i, i + SYNC_CONCURRENCY).map((t) => syncScheduler(env, t)))
@@ -32,7 +33,7 @@ export async function runMaintenance(env: CloudflareBindings, now = Date.now()):
 
   const lostRuns = await markLostRuns(env.DB, now)
 
-  const runsCutoff = now - retentionDays(env.RUN_RETENTION_DAYS) * DAY_MS
+  const runsCutoff = now - settings.retentionDays * DAY_MS
   let purgedRuns = 0
   let pending = tasks.map((t) => t.id)
   // Tasks that hit the per-statement limit still have a backlog; go round again.
@@ -49,7 +50,7 @@ export async function runMaintenance(env: CloudflareBindings, now = Date.now()):
     pending = backlog
   }
 
-  const statsCutoff = now - statsRetentionDays(env.STATS_RETENTION_DAYS) * DAY_MS
+  const statsCutoff = now - settings.statsRetentionDays * DAY_MS
   let purgedStats = 0
   for (let i = 0; i < MAX_PURGE_BATCHES; i++) {
     const n = await purgeOldStats(env.DB, statsCutoff)

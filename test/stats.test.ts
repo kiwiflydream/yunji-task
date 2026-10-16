@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
-import { claimRun, DAY_MS, getRun, insertSkippedRun, markLostRuns, recordAttempt, RUNNING_STALE_MS, statsRetentionDays, type RunMessage } from '../src/domain/runs-repo'
+import { claimRun, DAY_MS, getRun, insertSkippedRun, markLostRuns, recordAttempt, RUNNING_STALE_MS, type RunMessage } from '../src/domain/runs-repo'
 import {
   addAgg,
   bucketize,
@@ -18,7 +18,7 @@ import { deleteTask } from '../src/domain/tasks-repo'
 import { processRun } from '../src/executor/consumer'
 import { runMaintenance } from '../src/maintenance/maintenance'
 import type { StatsOverview, TaskStats } from '../src/shared/types'
-import { createTaskRow } from './helpers'
+import { createTaskRow, setRuntimeSettings } from './helpers'
 
 function agg(patch: Partial<Agg> & { at?: Record<number, number> } = {}): Agg {
   const { at, ...rest } = patch
@@ -174,7 +174,7 @@ const result = (durationMs: number) => ({ httpStatus: 200, responseBody: null, e
 
 describe('stats accumulation', () => {
   beforeEach(async () => {
-    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats_hourly'), env.DB.prepare('DELETE FROM settings')])
+    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats_hourly'), env.DB.prepare("DELETE FROM settings WHERE key = 'alert'")])
   })
   afterEach(() => vi.restoreAllMocks())
 
@@ -293,25 +293,18 @@ describe('stats accumulation', () => {
     expect(await statsRows(task.id)).toEqual([])
   })
 
-  it('maintenance purges stats older than STATS_RETENTION_DAYS', async () => {
+  it('maintenance uses saved statistics retention independently of logs', async () => {
     const task = await createTaskRow()
     const now = Date.now()
     await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: now - 11 * DAY_MS, reason: 'old' }, now)
     await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: now - 9 * DAY_MS, reason: 'kept' }, now)
-    const e = Object.create(env, { STATS_RETENTION_DAYS: { value: '10' } }) as CloudflareBindings
+    await setRuntimeSettings({ statsRetentionDays: 10 })
     vi.spyOn(console, 'log').mockImplementation(() => {})
-    const report = await runMaintenance(e, now)
+    const report = await runMaintenance(env, now)
     expect(report.purgedStats).toBe(1)
     expect(await statsRows(task.id)).toHaveLength(1)
   })
 
-  it('statsRetentionDays defaults to 90', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(statsRetentionDays(undefined)).toBe(90)
-    expect(statsRetentionDays('365')).toBe(365)
-    expect(statsRetentionDays('0')).toBe(90)
-    expect(warn).toHaveBeenCalledTimes(1)
-  })
 })
 
 describe('stats API', () => {

@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
 import * as repo from './tasks-repo'
-import { effectiveMode, executionMode, hasRunQueue, runQueue, WORKER_MAX_TIMEOUT_MS } from '../executor/mode'
+import { effectiveMode, hasRunQueue, runQueue, WORKER_MAX_TIMEOUT_MS } from '../executor/mode'
 import { nextFireTime } from '../lib/schedule'
 
 import type { Issue } from '../shared/types'
@@ -20,12 +20,12 @@ export function zodIssues(error: z.ZodError): Issue[] {
 }
 
 /** Validate raw input (JSON or form-derived) into a TaskInput. */
-export function parseTaskInput(raw: unknown, now: number, env?: CloudflareBindings): TaskInput {
+export async function parseTaskInput(raw: unknown, now: number, env: CloudflareBindings): Promise<TaskInput> {
   const parsed = taskInputSchema.safeParse(raw)
   if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
   assertRunnable(parsed.data, now)
   const timeoutMs = parsed.data.executor.config.timeoutMs
-  const mode = parsed.data.executionMode === 'inherit' && env ? executionMode(env) : parsed.data.executionMode
+  const mode = await effectiveMode(env, { executionMode: parsed.data.executionMode, timeoutMs })
   if (mode === 'worker' && timeoutMs > WORKER_MAX_TIMEOUT_MS) {
     throw new ValidationError([
       {
@@ -34,7 +34,7 @@ export function parseTaskInput(raw: unknown, now: number, env?: CloudflareBindin
       },
     ])
   }
-  if (env && mode === 'queue' && !hasRunQueue(env)) {
+  if (mode === 'queue' && !hasRunQueue(env)) {
     throw new ValidationError([
       { path: 'executionMode', message: '当前部署没有配置 Queue（wrangler.jsonc 的 queues），不能选择队列执行' },
     ])
@@ -67,14 +67,14 @@ export async function syncScheduler(env: CloudflareBindings, task: Task): Promis
 
 export async function createTask(env: CloudflareBindings, raw: unknown): Promise<Task> {
   const now = Date.now()
-  const task = await repo.insertTask(env.DB, parseTaskInput(raw, now, env), now)
+  const task = await repo.insertTask(env.DB, await parseTaskInput(raw, now, env), now)
   await syncScheduler(env, task)
   return task
 }
 
 export async function updateTask(env: CloudflareBindings, id: string, raw: unknown): Promise<Task | null> {
   const now = Date.now()
-  const task = await repo.updateTask(env.DB, id, parseTaskInput(raw, now, env), now)
+  const task = await repo.updateTask(env.DB, id, await parseTaskInput(raw, now, env), now)
   if (task) await syncScheduler(env, task)
   return task
 }
@@ -107,7 +107,7 @@ export async function triggerTask(env: CloudflareBindings, id: string): Promise<
   if (!task) return null
   const now = Date.now()
   const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
-  const mode = effectiveMode(env, { executionMode: task.executionMode, timeoutMs: task.executor.config.timeoutMs })
+  const mode = await effectiveMode(env, { executionMode: task.executionMode, timeoutMs: task.executor.config.timeoutMs })
   if (mode === 'queue') await runQueue(env).send(msg)
   else await env.TASK_SCHEDULER.getByName(id).execute(msg, mode)
   return msg.runId

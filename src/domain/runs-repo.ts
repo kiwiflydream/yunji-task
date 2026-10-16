@@ -49,33 +49,6 @@ function rowToRun(r: RunRow): Run {
 
 export const RUNNING_STALE_MS = 15 * 60_000
 export const RETRYING_STALE_MS = 75 * 60_000
-export const DEFAULT_RETENTION_DAYS = 30
-export const DEFAULT_STATS_RETENTION_DAYS = 90
-const MAX_RETENTION_DAYS = 3650
-
-/**
- * Parse a retention-days variable. Empty means the default; an invalid value
- * (e.g. 0, "abc") also falls back to the default rather than purging aggressively.
- */
-function parseRetentionDays(name: string, raw: string | undefined, fallback: number): number {
-  const value = raw?.trim() ?? ''
-  if (value === '') return fallback
-  const n = Number(value)
-  if (Number.isInteger(n) && n >= 1 && n <= MAX_RETENTION_DAYS) return n
-  console.warn(`invalid ${name} "${value}", using ${fallback}`)
-  return fallback
-}
-
-/** RUN_RETENTION_DAYS: how long individual runs (logs) are kept. */
-export function retentionDays(raw: string | undefined): number {
-  return parseRetentionDays('RUN_RETENTION_DAYS', raw, DEFAULT_RETENTION_DAYS)
-}
-
-/** STATS_RETENTION_DAYS: how long hourly statistics are kept. */
-export function statsRetentionDays(raw: string | undefined): number {
-  return parseRetentionDays('STATS_RETENTION_DAYS', raw, DEFAULT_STATS_RETENTION_DAYS)
-}
-
 export const DAY_MS = 24 * 60 * 60_000
 export const PURGE_BATCH = 1000
 

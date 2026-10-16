@@ -56,17 +56,25 @@ export type ExecutionMode = 'queue' | 'direct' | 'worker'
  * entrypoint returns; this leaves headroom for claiming, recording and reporting back.
  */
 export const WORKER_MAX_TIMEOUT_MS = 25_000
-/** A task's own setting; `inherit` follows EXECUTION_MODE. */
+/** A task's own setting; `inherit` follows the global runtime setting. */
 export type TaskExecutionMode = 'inherit' | ExecutionMode
 
-/** GET /admin/api/me */
-export interface AdminMe {
-  user: string
-  authMode: AdminAuthMode
+export interface RuntimeSettings {
+  executionMode: ExecutionMode
   retentionDays: number
   statsRetentionDays: number
-  /** The global default (EXECUTION_MODE). */
-  executionMode: ExecutionMode
+}
+
+export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
+  executionMode: 'worker',
+  retentionDays: 30,
+  statsRetentionDays: 90,
+}
+
+/** GET /admin/api/me */
+export interface AdminMe extends RuntimeSettings {
+  user: string
+  authMode: AdminAuthMode
   /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
   queueAvailable: boolean
 }

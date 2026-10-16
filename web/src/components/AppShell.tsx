@@ -14,7 +14,7 @@ const NAV = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const [location] = useLocation()
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   return (
     <Sidebar.Provider defaultOpen collapsible="icon" className="h-svh">
       <Sidebar>

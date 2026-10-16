@@ -1,9 +1,10 @@
 import { WORKER_MAX_TIMEOUT_MS, type ExecutionMode, type TaskExecutionMode } from '../shared/types'
+import { getRuntimeSettings } from '../domain/settings'
 
 export { WORKER_MAX_TIMEOUT_MS }
 
 /**
- * EXECUTION_MODE selects how runs reach the executor:
+ * The global runtime setting selects how runs reach the executor:
  * - `queue`: the scheduler DO enqueues a message; the queue consumer
  *   executes it and retries via delayed messages.
  * - `direct`: the scheduler DO executes runs itself (in `waitUntil`) and keeps
@@ -13,14 +14,9 @@ export { WORKER_MAX_TIMEOUT_MS }
  *   over `ctx.exports`, which executes it in its own `waitUntil` (billed by CPU
  *   only). Retries are kept by the DO as in direct mode. Each request's timeout
  *   is capped at WORKER_MAX_TIMEOUT_MS to fit waitUntil's 30 s budget.
- * Unknown values fall back to `worker`.
  */
-export function executionMode(env: { EXECUTION_MODE?: string }): ExecutionMode {
-  const value = env.EXECUTION_MODE?.trim() ?? ''
-  if (value === '' || value === 'worker') return 'worker'
-  if (value === 'direct' || value === 'queue') return value
-  console.warn(`invalid EXECUTION_MODE "${value}", using worker`)
-  return 'worker'
+export async function executionMode(env: Pick<CloudflareBindings, 'DB'>): Promise<ExecutionMode> {
+  return (await getRuntimeSettings(env.DB)).executionMode
 }
 
 /** Whether the RUN_QUEUE binding is configured. */
@@ -30,13 +26,13 @@ export function hasRunQueue(env: CloudflareBindings): boolean {
 
 /**
  * The mode a task's runs actually use: the task's own setting, else
- * EXECUTION_MODE.
+ * the saved global runtime setting.
  * Timeout and binding availability never change the selected mode.
  */
-export function effectiveMode(
+export async function effectiveMode(
   env: CloudflareBindings,
   task: { executionMode: TaskExecutionMode; timeoutMs: number },
-): ExecutionMode {
+): Promise<ExecutionMode> {
   return task.executionMode === 'inherit' ? executionMode(env) : task.executionMode
 }
 
@@ -48,7 +44,7 @@ export function effectiveMode(
 export function runQueue(env: CloudflareBindings): Queue {
   const queue = (env as { RUN_QUEUE?: Queue }).RUN_QUEUE
   if (!queue) {
-    throw new Error('EXECUTION_MODE is "queue" but the RUN_QUEUE binding is not configured (see wrangler.jsonc "queues")')
+    throw new Error('queue mode selected but the RUN_QUEUE binding is not configured (see wrangler.jsonc "queues")')
   }
   return queue
 }

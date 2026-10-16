@@ -3,6 +3,7 @@ import { sign } from 'hono/jwt'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
 import { getTask } from '../src/domain/tasks-repo'
+import { setRuntimeSettings } from './helpers'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -239,8 +240,10 @@ describe('admin SPA and API', () => {
     expect(res.status).toBe(403)
   })
 
-  it('reports RUN_RETENTION_DAYS and STATS_RETENTION_DAYS in /admin/api/me', async () => {
-    const res = await get('/admin/api/me', withEnv({ RUN_RETENTION_DAYS: '7', STATS_RETENTION_DAYS: '365' }))
-    expect(await res.json()).toMatchObject({ retentionDays: 7, statsRetentionDays: 365 })
+  it('reports the latest saved runtime settings in /admin/api/me', async () => {
+    await setRuntimeSettings({ executionMode: 'direct', retentionDays: 7, statsRetentionDays: 365 })
+    const res = await get('/admin/api/me')
+    expect(await res.json()).toMatchObject({ executionMode: 'direct', retentionDays: 7, statsRetentionDays: 365 })
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })

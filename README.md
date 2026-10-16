@@ -50,9 +50,16 @@ pnpm deploy                             # vite build && wrangler deploy
 | `ADMIN_AUTH_MODE` | `basic` | 后台认证方式：`basic` 或 `access` |
 | `ADMIN_USERNAME` | `admin` | basic 模式用户名（密码是 secret `ADMIN_PASSWORD`） |
 | `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | 空 | access 模式必填 |
-| `EXECUTION_MODE` | `worker` | 全局默认的执行方式：`worker`、`queue` 或 `direct`，任务可以单独覆盖。怎么选见下文「选择执行方式」 |
-| `RUN_RETENTION_DAYS` | `30` | 执行日志保留天数（1–3650） |
-| `STATS_RETENTION_DAYS` | `90` | 小时级统计保留天数（1–3650），与日志保留互相独立 |
+
+后台「设置 → 运行设置」保存到 D1，无需重启或重新部署：
+
+| 设置 | 默认 | 生效方式 |
+|---|---|---|
+| 全局默认执行方式 | Worker 异步 | 「跟随全局」任务从下一次新触发开始使用；显式选择的方式、已开始的执行及已安排的重试保持原方式 |
+| 日志保留天数 | 30 | 1–3650 天，下一轮清理使用 |
+| 统计保留天数 | 90 | 1–3650 天，与日志独立，下一轮清理使用 |
+
+运行配置只有 D1 中这一处来源；未保存时使用上表默认值。API：`GET /api/settings/runtime`、`PUT /api/settings/runtime`，配置字段为 `executionMode`、`retentionDays`、`statsRetentionDays`，PUT 需要提交完整配置；后台对应 `/admin/api/settings/runtime`。保存队列方式前会检查 Queue 绑定，非法配置返回 422，不覆盖原值。调度器在每次新触发时读取最新配置，不等待每 5 分钟的对账；保留天数由每 5 分钟的清理任务读取，调大天数不会恢复已删除的数据。
 
 后台默认使用 basic 认证；没设置 `ADMIN_PASSWORD` 时 `/admin` 返回 503。改用 Cloudflare Access：在 Zero Trust 中为 `<你的域名>/admin` 创建 Self-hosted 应用，把 `ADMIN_AUTH_MODE` 设为 `access`，填入团队域名（如 `myteam.cloudflareaccess.com`）和应用的 AUD tag 后重新部署。`/api` 不受这两种方式影响，始终用 `Authorization: Bearer $API_TOKEN`。
 
@@ -103,7 +110,7 @@ pnpm deploy                             # vite build && wrangler deploy
 
 ### 执行方式与超时
 
-全局默认是 `EXECUTION_MODE=worker`，新任务的执行方式默认是「跟随全局」。执行方式只由任务配置和全局配置决定，不会根据超时、接口实际耗时或 Queue 是否可用自动切换。
+全局默认是 Worker 异步，可在设置页修改；新任务的执行方式默认是「跟随全局」。执行方式只由任务配置和全局配置决定，不会根据超时、接口实际耗时或 Queue 是否可用自动切换。
 
 | 配置的执行方式 | 保存校验 | 执行时的请求超时 |
 |---|---|---|
@@ -185,6 +192,7 @@ Paid 套餐每月 $5 起，额度按月计算，超出后按量计费。执行�
 | GET | `/api/runs/:id` | 单次执行 |
 | GET · PUT · DELETE | `/api/variables` · `/api/variables/:name` | 加密变量（值不返回） |
 | GET · PUT | `/api/settings/alert` | 全局告警 |
+| GET · PUT | `/api/settings/runtime` | 全局执行方式、日志与统计保留天数 |
 | GET | `/api/stats/overview?range=24h\|7d\|30d\|90d&tz=Asia/Shanghai` | 全局统计：汇总、时间序列、失败最多 / 最慢的任务 |
 | GET | `/api/tasks/:id/stats?range=…&tz=…` | 单任务统计，附耗时分布 |
 

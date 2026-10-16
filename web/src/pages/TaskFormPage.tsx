@@ -343,7 +343,7 @@ function ExecutionModeField({
   onChange: (v: TaskFormState['executionMode']) => void
   error?: string
 }) {
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   // Suggest from this task's own recent durations (editing only).
   const stats = useQuery({
     queryKey: ['stats', 'task', taskId, '7d'],
@@ -369,7 +369,7 @@ function ExecutionModeField({
       <Radio.Item
         label="跟随全局"
         value="inherit"
-        description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（EXECUTION_MODE）` : 'EXECUTION_MODE'}
+        description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（设置页可修改）` : '可在设置页修改全局方式'}
       />
       <Radio.Item
         label={MODE_LABEL.worker}

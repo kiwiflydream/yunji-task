@@ -60,19 +60,9 @@
     "crons": ["*/5 * * * *"]
   },
   "vars": {
-    // Default execution mode (tasks may override it), see README "选择执行方式":
-    // "worker" (default; the DO hands the call to a Worker, timeouts up to 25 s),
-    // "queue" or "direct" (the scheduler DO calls the endpoint itself).
-    // Execution always follows the selected mode; Worker timeouts are capped
-    // at 25 s. Select "queue" or "direct" explicitly for longer timeouts.
-    // You may delete "queues" above if no task uses queue mode.
-    "EXECUTION_MODE": "worker",
     // Admin UI auth: "basic" (ADMIN_USERNAME + ADMIN_PASSWORD secret) or "access" (Cloudflare Access).
     "ADMIN_AUTH_MODE": "basic",
     "ADMIN_USERNAME": "admin",
-    // Days of run logs to keep (1-3650); purged by the 5-minute cron.
-    "RUN_RETENTION_DAYS": "30",
-    "STATS_RETENTION_DAYS": "90",
     // Only used when ADMIN_AUTH_MODE is "access".
     "ACCESS_TEAM_DOMAIN": "",
     "ACCESS_AUD": ""

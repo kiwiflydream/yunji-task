@@ -1,12 +1,12 @@
 import { createExecutionContext, createScheduledController, runInDurableObject, waitOnExecutionContext } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { describe, expect, it, vi } from 'vitest'
-import { claimRun, getRun, recordAttempt, retentionDays, RETRYING_STALE_MS, RUNNING_STALE_MS } from '../src/domain/runs-repo'
+import { claimRun, getRun, recordAttempt, RETRYING_STALE_MS, RUNNING_STALE_MS } from '../src/domain/runs-repo'
 import { getTask } from '../src/domain/tasks-repo'
 import worker from '../src/index'
 import { runMaintenance } from '../src/maintenance/maintenance'
 import type { TaskScheduler } from '../src/scheduler/task-scheduler'
-import { createTaskRow, toSnapshot } from './helpers'
+import { createTaskRow, setRuntimeSettings, toSnapshot } from './helpers'
 
 const DAY = 24 * 60 * 60_000
 
@@ -82,13 +82,15 @@ describe('runMaintenance', () => {
     expect(await getRun(env.DB, recent)).not.toBeNull()
   })
 
-  it('honours RUN_RETENTION_DAYS', async () => {
+  it('uses saved log retention settings on the next cleanup', async () => {
     const task = await createTaskRow()
     const now = Date.now()
     const eightDays = await seedRun(task.id, now - 8 * DAY, 'success')
     const sixDays = await seedRun(task.id, now - 6 * DAY, 'success')
-    const e = Object.create(env, { RUN_RETENTION_DAYS: { value: '7' } }) as CloudflareBindings
-    await runMaintenance(e, now)
+    await runMaintenance(env, now)
+    expect(await getRun(env.DB, eightDays)).not.toBeNull()
+    await setRuntimeSettings({ retentionDays: 7 })
+    await runMaintenance(env, now)
     expect(await getRun(env.DB, eightDays)).toBeNull()
     expect(await getRun(env.DB, sixDays)).not.toBeNull()
   })
@@ -100,18 +102,5 @@ describe('runMaintenance', () => {
     await waitOnExecutionContext(ctx)
     expect(log.mock.calls.some(([line]) => String(line).includes('"event":"maintenance"'))).toBe(true)
     log.mockRestore()
-  })
-})
-
-describe('retentionDays', () => {
-  it('uses the default for empty or invalid values', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(retentionDays(undefined)).toBe(30)
-    expect(retentionDays('')).toBe(30)
-    expect(retentionDays(' 90 ')).toBe(90)
-    expect(retentionDays('1')).toBe(1)
-    for (const bad of ['0', '-5', '1.5', 'abc', '99999']) expect(retentionDays(bad)).toBe(30)
-    expect(warn).toHaveBeenCalledTimes(5)
-    warn.mockRestore()
   })
 })

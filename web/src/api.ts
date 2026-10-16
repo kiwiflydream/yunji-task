@@ -4,6 +4,7 @@ import type {
   AlertSettings,
   Issue,
   Run,
+  RuntimeSettings,
   SchedulerStatus,
   StatsOverview,
   StatsRange,
@@ -73,6 +74,8 @@ export const api = {
   alert: () => request<{ alert: AlertSettings }>('/settings/alert').then((r) => r.alert),
   putAlert: (alert: AlertSettings) =>
     request<{ alert: AlertSettings }>('/settings/alert', json('PUT', alert)).then((r) => r.alert),
+  putRuntimeSettings: (settings: RuntimeSettings) =>
+    request<{ settings: RuntimeSettings }>('/settings/runtime', json('PUT', settings)).then((r) => r.settings),
 }
 
 export const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err))

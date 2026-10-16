@@ -7,9 +7,10 @@ import { getTask } from '../src/domain/tasks-repo'
 import { processRun } from '../src/executor/consumer'
 import { effectiveMode, executionMode, WORKER_MAX_TIMEOUT_MS } from '../src/executor/mode'
 import { executeInWorker } from '../src/executor/run-executor'
+import type { ExecutionMode } from '../src/shared/types'
 import type { PendingRun, TaskScheduler } from '../src/scheduler/task-scheduler'
 import { emptyTaskForm } from '../web/src/lib/task-form'
-import { createTaskRow, toSnapshot } from './helpers'
+import { createTaskRow, setRuntimeSettings, toSnapshot } from './helpers'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -24,14 +25,14 @@ const SHORT_HTTP = (url = 'https://downstream.test/hook') => ({
 })
 
 /** Give a scheduler a recording queue, which worker mode must not use. */
-async function instrument(stub: DurableObjectStub<TaskScheduler>, mode?: string) {
+async function instrument(stub: DurableObjectStub<TaskScheduler>, mode?: ExecutionMode) {
+  if (mode) await setRuntimeSettings({ executionMode: mode })
   const sent: RunMessage[] = []
   await runInDurableObject(stub, (instance: TaskScheduler, state) => {
     const real = (instance as unknown as { env: CloudflareBindings }).env
     Object.defineProperty(instance, 'env', {
       value: Object.create(real, {
         RUN_QUEUE: { value: { send: async (m: RunMessage) => void sent.push(m) } },
-        ...(mode ? { EXECUTION_MODE: { value: mode } } : {}),
       }),
       configurable: true,
     })
@@ -174,22 +175,23 @@ describe('worker mode', () => {
   })
 
   it('validates inherited worker timeouts on create and update, while allowing explicit longer-running modes', async () => {
-    const workerEnv = Object.create(env, { EXECUTION_MODE: { value: 'worker' } }) as CloudflareBindings
+    await setRuntimeSettings({ executionMode: 'worker' })
     const body = (timeoutMs: number, executionMode = 'inherit') => JSON.stringify({
       name: 'inherited timeout',
       schedule: { type: 'manual' },
       executor: { type: 'http', config: { url: 'https://downstream.test/hook', timeoutMs } },
       executionMode,
     })
-    expect((await call('/tasks', { method: 'POST', body: body(25_001) }, workerEnv)).status).toBe(422)
-    const created = await call('/tasks', { method: 'POST', body: body(25_000) }, workerEnv)
+    expect((await call('/tasks', { method: 'POST', body: body(25_001) })).status).toBe(422)
+    const created = await call('/tasks', { method: 'POST', body: body(25_000) })
     expect(created.status).toBe(201)
     const { task } = await created.json() as { task: { id: string } }
-    expect((await call(`/tasks/${task.id}`, { method: 'PUT', body: body(60_000) }, workerEnv)).status).toBe(422)
+    expect((await call(`/tasks/${task.id}`, { method: 'PUT', body: body(60_000) })).status).toBe(422)
     expect((await getTask(env.DB, task.id))?.executor.config.timeoutMs).toBe(25_000)
     for (const mode of ['direct', 'queue']) {
-      expect((await call('/tasks', { method: 'POST', body: body(60_000, mode) }, workerEnv)).status).toBe(201)
+      expect((await call('/tasks', { method: 'POST', body: body(60_000, mode) })).status).toBe(201)
     }
+    await setRuntimeSettings({ executionMode: 'queue' })
     expect((await call('/tasks', { method: 'POST', body: body(60_000) })).status).toBe(201)
   })
 
@@ -208,14 +210,14 @@ describe('worker mode', () => {
     expect(Number(emptyTaskForm.timeoutSeconds) * 1000).toBe(WORKER_MAX_TIMEOUT_MS)
   })
 
-  it('a long timeout and a missing queue never change worker mode', () => {
-    const workerEnv = Object.create(env, { EXECUTION_MODE: { value: 'worker' } }) as CloudflareBindings
-    expect(executionMode({ EXECUTION_MODE: 'worker' })).toBe('worker')
-    expect(effectiveMode(workerEnv, { executionMode: 'inherit', timeoutMs: 25_000 })).toBe('worker')
-    expect(effectiveMode(workerEnv, { executionMode: 'inherit', timeoutMs: 25_001 })).toBe('worker')
-    const noQueue = Object.create(workerEnv, { RUN_QUEUE: { value: undefined } }) as CloudflareBindings
-    expect(effectiveMode(noQueue, { executionMode: 'inherit', timeoutMs: 60_000 })).toBe('worker')
-    expect(effectiveMode(noQueue, { executionMode: 'worker', timeoutMs: 60_000 })).toBe('worker')
+  it('a long timeout and a missing queue never change worker mode', async () => {
+    await setRuntimeSettings({ executionMode: 'worker' })
+    expect(await executionMode(env)).toBe('worker')
+    expect(await effectiveMode(env, { executionMode: 'inherit', timeoutMs: 25_000 })).toBe('worker')
+    expect(await effectiveMode(env, { executionMode: 'inherit', timeoutMs: 25_001 })).toBe('worker')
+    const noQueue = Object.create(env, { RUN_QUEUE: { value: undefined } }) as CloudflareBindings
+    expect(await effectiveMode(noQueue, { executionMode: 'inherit', timeoutMs: 60_000 })).toBe('worker')
+    expect(await effectiveMode(noQueue, { executionMode: 'worker', timeoutMs: 60_000 })).toBe('worker')
   })
 
   it('keeps scheduled inherited runs and retries in worker mode after the global mode changes, capping each at 25 seconds', async () => {
@@ -238,6 +240,7 @@ describe('worker mode', () => {
     await runDurableObjectAlarm(stub)
     await settled(task.id, 'retrying')
     await vi.waitFor(async () => expect(await pending(stub)).toMatchObject([{ mode: 'worker', msg: { attempt: 2 } }]))
+    await setRuntimeSettings({ executionMode: 'direct' })
     await runDurableObjectAlarm(stub)
     await settled(task.id, 'failed', 2)
     await vi.waitFor(async () => expect((await stub.status()).running).toBeNull())
@@ -255,8 +258,8 @@ describe('worker mode', () => {
       schedule: { type: 'manual' },
       executor: { type: 'http', config: { url: 'https://downstream.test/hook', timeoutMs: 60_000 } },
     })
+    await setRuntimeSettings({ executionMode: 'worker' })
     const workerEnv = Object.create(env, {
-      EXECUTION_MODE: { value: 'worker' },
       RUN_QUEUE: { value: undefined },
     }) as CloudflareBindings
     expect((await call(`/tasks/${task.id}/trigger`, { method: 'POST' }, workerEnv)).status).toBe(202)

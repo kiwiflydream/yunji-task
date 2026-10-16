@@ -3,9 +3,9 @@ import { env } from 'cloudflare:workers'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
 import { getRun, listRuns } from '../src/domain/runs-repo'
-import { executionMode, runQueue } from '../src/executor/mode'
+import { runQueue } from '../src/executor/mode'
 import type { TaskScheduler } from '../src/scheduler/task-scheduler'
-import { createTaskRow, toSnapshot } from './helpers'
+import { createTaskRow, setRuntimeSettings, toSnapshot } from './helpers'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -15,10 +15,11 @@ const originalEnv = new WeakMap<object, CloudflareBindings>()
 
 /** Switch a scheduler instance to direct mode; `patch` overrides further bindings. */
 async function useDirectMode(stub: DurableObjectStub<TaskScheduler>, patch: Record<string, unknown> = {}) {
+  await setRuntimeSettings({ executionMode: 'direct' })
   await runInDurableObject(stub, (instance: TaskScheduler) => {
     if (!originalEnv.has(instance)) originalEnv.set(instance, (instance as unknown as { env: CloudflareBindings }).env)
     const real = originalEnv.get(instance)!
-    const props: PropertyDescriptorMap = { EXECUTION_MODE: { value: 'direct' }, RUN_QUEUE: { value: noQueue } }
+    const props: PropertyDescriptorMap = { RUN_QUEUE: { value: noQueue } }
     for (const [k, v] of Object.entries(patch)) props[k] = { value: v }
     Object.defineProperty(instance, 'env', { value: Object.create(real, props), configurable: true })
   })
@@ -90,6 +91,7 @@ describe('direct mode', () => {
     expect(nextFire).toBeGreaterThan(retry.dueAt)
 
     // The alarm now serves the retry, not the yearly fire.
+    await setRuntimeSettings({ executionMode: 'queue' })
     await runDurableObjectAlarm(stub)
     await settled(task.id, 'success', 2)
     expect(calls).toHaveLength(2)
@@ -150,7 +152,7 @@ describe('direct mode', () => {
 
   it('redelivers an attempt that hit an infrastructure error', async () => {
     mockFetch(200)
-    const task = await createTaskRow({ schedule: YEARLY })
+    const task = await createTaskRow({ schedule: YEARLY, executionMode: 'direct' })
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
     const brokenDb = { prepare: () => ({ bind: () => ({ first: () => Promise.reject(new Error('D1 is down')) }) }) }
@@ -170,7 +172,8 @@ describe('direct mode', () => {
   it('manual triggers go straight to the DO', async () => {
     const calls = mockFetch(200)
     const task = await createTaskRow({ schedule: { type: 'manual' } })
-    const e = Object.create(env, { EXECUTION_MODE: { value: 'direct' }, RUN_QUEUE: { value: noQueue } })
+    await setRuntimeSettings({ executionMode: 'direct' })
+    const e = Object.create(env, { RUN_QUEUE: { value: noQueue } })
     const res = await app.request(
       `http://cf-task.test/api/tasks/${task.id}/trigger`,
       { method: 'POST', headers: { authorization: `Bearer ${env.API_TOKEN}` } },
@@ -184,17 +187,7 @@ describe('direct mode', () => {
   })
 })
 
-describe('executionMode', () => {
-  it('defaults to worker and ignores unknown values', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(executionMode({})).toBe('worker')
-    expect(executionMode({ EXECUTION_MODE: ' direct ' })).toBe('direct')
-    expect(executionMode({ EXECUTION_MODE: 'queue' })).toBe('queue')
-    expect(executionMode({ EXECUTION_MODE: 'worker' })).toBe('worker')
-    expect(executionMode({ EXECUTION_MODE: 'inline' })).toBe('worker')
-    expect(warn).toHaveBeenCalledTimes(1)
-  })
-
+describe('queue binding', () => {
   it('queue mode without the binding fails with a clear message', () => {
     const e = Object.create(env, { RUN_QUEUE: { value: undefined } }) as CloudflareBindings
     expect(() => runQueue(e)).toThrow(/RUN_QUEUE binding is not configured/)

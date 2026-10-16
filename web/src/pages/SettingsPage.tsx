@@ -1,7 +1,7 @@
-import { Button, Input, InputArea, LayerCard, Text, useKumoToastManager } from '@cloudflare/kumo'
+import { Button, Input, InputArea, LayerCard, Radio, Text, useKumoToastManager } from '@cloudflare/kumo'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import type { AlertSettings, ExecutionMode } from '../../../src/shared/types'
+import type { AdminMe, AlertSettings, RuntimeSettings } from '../../../src/shared/types'
 import { api, ApiError, errorMessage } from '../api'
 import { DescriptionList } from '../components/DescriptionList'
 import { PageHeader } from '../components/PageHeader'
@@ -21,19 +21,20 @@ const PLACEHOLDERS = [
 
 const FEISHU_EXAMPLE = '{"msg_type":"text","content":{"text":"任务 {{task.name}} 失败：{{run.error}}"}}'
 
-const EXECUTION_MODE_TEXT: Record<ExecutionMode, string> = {
-  queue: '队列：经 Queue 投递给 Worker 执行',
-  direct: '直接执行：调度器 DO 自己发起请求',
-  worker: 'Worker 异步：调度器 DO 交给 Worker 后台执行',
-}
-
 export function SettingsPage() {
   const alert = useQuery({ queryKey: ['alert'], queryFn: api.alert })
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   return (
     <>
       <PageHeader title="设置" />
       <div className="flex flex-col gap-4">
+        {me.isPending ? (
+          <PageLoader />
+        ) : me.isError ? (
+          <ErrorBanner error={me.error} />
+        ) : (
+          <RuntimeSettingsForm initial={me.data} />
+        )}
         {alert.isPending ? (
           <PageLoader />
         ) : alert.isError ? (
@@ -44,9 +45,9 @@ export function SettingsPage() {
         <LayerCard>
           <LayerCard.Secondary>
             <div className="flex flex-col">
-              <span>运行配置</span>
+              <span>后台认证</span>
               <Text size="xs" variant="secondary">
-                来自 wrangler.jsonc 的 vars 和 secrets，修改后重新部署生效。
+                认证配置来自 wrangler.jsonc 的 vars 和 secrets，修改后重新部署生效。
               </Text>
             </div>
           </LayerCard.Secondary>
@@ -56,12 +57,6 @@ export function SettingsPage() {
                 items={[
                   ['后台认证', me.data.authMode === 'access' ? 'Cloudflare Access（ADMIN_AUTH_MODE=access）' : 'Basic 认证（ADMIN_AUTH_MODE=basic）'],
                   ['当前用户', me.data.user],
-                  ['日志保留', `${me.data.retentionDays} 天（RUN_RETENTION_DAYS）`],
-                  ['统计保留', `${me.data.statsRetentionDays} 天（STATS_RETENTION_DAYS）`],
-                  [
-                    '执行方式',
-                    `${EXECUTION_MODE_TEXT[me.data.executionMode]}（EXECUTION_MODE=${me.data.executionMode}，任务可单独覆盖）`,
-                  ],
                 ]}
               />
             ) : (
@@ -71,6 +66,121 @@ export function SettingsPage() {
         </LayerCard>
       </div>
     </>
+  )
+}
+
+function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
+  const [mode, setMode] = useState(initial.executionMode)
+  const [retentionDays, setRetentionDays] = useState(String(initial.retentionDays))
+  const [statsRetentionDays, setStatsRetentionDays] = useState(String(initial.statsRetentionDays))
+  const [errors, setErrors] = useState<Partial<Record<keyof RuntimeSettings, string>>>({})
+  const [error, setError] = useState<string | null>(null)
+  const toasts = useKumoToastManager()
+  const qc = useQueryClient()
+  const save = useMutation({
+    mutationFn: () => api.putRuntimeSettings({
+      executionMode: mode,
+      retentionDays: Number(retentionDays),
+      statsRetentionDays: Number(statsRetentionDays),
+    }),
+    onSuccess: (saved) => {
+      qc.setQueryData<AdminMe>(['me'], (previous) => previous ? { ...previous, ...saved } : previous)
+      setMode(saved.executionMode)
+      setRetentionDays(String(saved.retentionDays))
+      setStatsRetentionDays(String(saved.statsRetentionDays))
+      setErrors({})
+      setError(null)
+      toasts.add({ title: '运行设置已保存', variant: 'success' })
+    },
+    onError: (err) => {
+      const fields: Partial<Record<keyof RuntimeSettings, string>> = {}
+      if (err instanceof ApiError) {
+        for (const issue of err.issues) {
+          if (issue.path === 'executionMode' || issue.path === 'retentionDays' || issue.path === 'statsRetentionDays') {
+            fields[issue.path] = issue.message
+          }
+        }
+      }
+      setErrors(fields)
+      setError(Object.keys(fields).length ? '保存失败，请检查标出的字段。' : errorMessage(err))
+    },
+  })
+  return (
+    <LayerCard>
+      <LayerCard.Secondary>
+        <div className="flex flex-col">
+          <span>运行设置</span>
+          <Text size="xs" variant="secondary">
+            保存后生效，无需重启或重新部署。
+          </Text>
+        </div>
+      </LayerCard.Secondary>
+      <LayerCard.Primary>
+        <form
+          className="flex flex-col gap-4"
+          noValidate
+          onSubmit={(e) => {
+            e.preventDefault()
+            save.mutate()
+          }}
+        >
+          <Radio.Group
+            legend="全局默认执行方式"
+            appearance="card"
+            orientation="horizontal"
+            value={mode}
+            onValueChange={(value) => setMode(value as RuntimeSettings['executionMode'])}
+            error={errors.executionMode}
+            description="仅影响「跟随全局」任务的新执行；已开始的执行和已安排的重试保持原方式。"
+          >
+            <Radio.Item label="Worker 异步" value="worker" description="Worker 后台执行，请求超时最高 25 秒" />
+            <Radio.Item
+              label="队列"
+              value="queue"
+              disabled={!initial.queueAvailable && mode !== 'queue'}
+              description={initial.queueAvailable ? '通过 Queue 投递执行' : '当前部署没有配置 Queue'}
+            />
+            <Radio.Item label="直接执行" value="direct" description="调度器 DO 发起请求，等待按时长计费" />
+          </Radio.Group>
+          {mode === 'worker' && (
+            <Text size="sm" variant="secondary">
+              已有任务的超时即使超过 25 秒，Worker 每次请求仍以 25 秒为上限，不会自动切换执行方式。
+            </Text>
+          )}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Input
+              label="日志保留天数"
+              type="number"
+              min={1}
+              max={3650}
+              step={1}
+              value={retentionDays}
+              onChange={(e) => setRetentionDays(e.target.value)}
+              error={errors.retentionDays}
+              description="1–3650 天，默认 30 天"
+            />
+            <Input
+              label="统计保留天数"
+              type="number"
+              min={1}
+              max={3650}
+              step={1}
+              value={statsRetentionDays}
+              onChange={(e) => setStatsRetentionDays(e.target.value)}
+              error={errors.statsRetentionDays}
+              description="1–3650 天，默认 90 天，与日志独立"
+            />
+          </div>
+          <Text size="sm" variant="secondary">
+            保留天数由下一轮清理任务使用（每 5 分钟一次）。缩短天数会清理更早的数据，调大天数不会恢复已删除的数据。
+          </Text>
+          {error && <Text size="sm" variant="error">{error}</Text>}
+          <div>
+            <Button type="submit" variant="primary" loading={save.isPending}>保存运行设置</Button>
+          </div>
+        </form>
+      </LayerCard.Primary>
+    </LayerCard>
   )
 }
 

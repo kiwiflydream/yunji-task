@@ -18,7 +18,7 @@ import {
 
 export default function StatsPage() {
   const [range, setRange] = useState<StatsRange>('24h')
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const stats = useQuery({
     queryKey: ['stats', range],
     queryFn: () => api.statsOverview(range),

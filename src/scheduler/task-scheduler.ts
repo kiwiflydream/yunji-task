@@ -176,6 +176,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
           return
         }
       }
+      const mode = await effectiveMode(this.env, snapshot)
       const msg: RunMessage = {
         runId: crypto.randomUUID(),
         taskId: snapshot.taskId,
@@ -185,7 +186,6 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       }
       // Take the slot before handing the run off so a fast finish cannot race ahead of it.
       if (skip) await storage.put(K_RUNNING, { runId: msg.runId, leaseUntil: now + snapshot.leaseMs })
-      const mode = effectiveMode(this.env, snapshot)
       if (mode !== 'queue') {
         this.start({ msg, dueAt: now, deliveries: 0, mode })
         return

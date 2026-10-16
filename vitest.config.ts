@@ -14,8 +14,6 @@ export default defineConfig(async () => {
             ADMIN_PASSWORD: 'test-admin-password',
             // Test-only key: base64 of 32 bytes.
             ENCRYPTION_KEY: 'q6Qz3hS1n0QnQ2tY2l8m3dXg7Kp0rZb9Vw4Uo1Ey5cI=',
-            // Most tests follow runs through the queue; the other modes set it per test.
-            EXECUTION_MODE: 'queue',
           },
         },
       }),

@@ -2,7 +2,8 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { requireApiToken } from '../auth/api-token'
 import { getRun, listRuns } from '../domain/runs-repo'
-import { alertSettingsSchema, getAlertSettings, putAlertSettings } from '../domain/settings'
+import { alertSettingsSchema, getAlertSettings, getRuntimeSettings, putAlertSettings, putRuntimeSettings, runtimeSettingsSchema } from '../domain/settings'
+import { hasRunQueue } from '../executor/mode'
 import type { Task } from '../domain/task'
 import * as service from '../domain/task-service'
 import { ValidationError, zodIssues } from '../domain/task-service'
@@ -171,6 +172,21 @@ apiRoutes.delete('/variables/:name', async (c) => {
 })
 
 apiRoutes.get('/settings/alert', async (c) => c.json({ alert: await getAlertSettings(c.env.DB) }))
+
+apiRoutes.get('/settings/runtime', async (c) => {
+  c.header('cache-control', 'no-store')
+  return c.json({ settings: await getRuntimeSettings(c.env.DB) })
+})
+
+apiRoutes.put('/settings/runtime', async (c) => {
+  const body = runtimeSettingsSchema.safeParse(await jsonBody(c.req.raw))
+  if (!body.success) throw new ValidationError(zodIssues(body.error))
+  if (body.data.executionMode === 'queue' && !hasRunQueue(c.env)) {
+    throw new ValidationError([{ path: 'executionMode', message: '当前部署没有配置 Queue，不能选择队列执行' }])
+  }
+  await putRuntimeSettings(c.env.DB, body.data, Date.now())
+  return c.json({ settings: body.data })
+})
 
 apiRoutes.put('/settings/alert', async (c) => {
   const body = alertSettingsSchema.safeParse(await jsonBody(c.req.raw))

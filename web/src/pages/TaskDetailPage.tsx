@@ -75,7 +75,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function ScheduleCard({ task }: { task: TaskView }) {
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const scheduler = useQuery({
     queryKey: ['scheduler', task.id],
     queryFn: () => api.scheduler(task.id),
@@ -163,7 +163,7 @@ function RequestCard({ task }: { task: TaskView }) {
 }
 
 function RunsCard({ taskId }: { taskId: string }) {
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const runs = useInfiniteQuery({
     queryKey: ['runs', taskId],
     queryFn: ({ pageParam }) => api.runs(taskId, pageParam),

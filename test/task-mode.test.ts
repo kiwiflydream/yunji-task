@@ -6,10 +6,10 @@ import { listRuns, type RunMessage } from '../src/domain/runs-repo'
 import type { ScheduleSnapshot } from '../src/domain/task'
 import { effectiveMode } from '../src/executor/mode'
 import type { TaskScheduler } from '../src/scheduler/task-scheduler'
-import type { TaskExecutionMode } from '../src/shared/types'
+import type { ExecutionMode, TaskExecutionMode } from '../src/shared/types'
 import { describeTaskMode, effectiveTaskMode, suggestMode, suggestionText } from '../web/src/lib/execution-mode'
 import { emptyTaskForm, formToPayload, mapIssues } from '../web/src/lib/task-form'
-import { createTaskRow, toSnapshot } from './helpers'
+import { createTaskRow, setRuntimeSettings, toSnapshot } from './helpers'
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -28,7 +28,8 @@ const taskBody = (executionMode?: TaskExecutionMode) => ({
 })
 
 /** Replace a scheduler's bindings; returns what was sent to its queue. */
-async function schedulerEnv(stub: DurableObjectStub<TaskScheduler>, overrides: Record<string, unknown>) {
+async function schedulerEnv(stub: DurableObjectStub<TaskScheduler>, overrides: Record<string, unknown>, mode: ExecutionMode = 'queue') {
+  await setRuntimeSettings({ executionMode: mode })
   const sent: RunMessage[] = []
   await runInDurableObject(stub, (instance: TaskScheduler) => {
     const real = (instance as unknown as { env: CloudflareBindings }).env
@@ -89,7 +90,7 @@ describe('per-task execution mode: dispatch', () => {
     const task = await createTaskRow({ executionMode: 'direct' })
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
-    const sent = await schedulerEnv(stub, { EXECUTION_MODE: 'queue' })
+    const sent = await schedulerEnv(stub, {})
 
     await runDurableObjectAlarm(stub)
     await ranDirectly(task.id)
@@ -100,7 +101,7 @@ describe('per-task execution mode: dispatch', () => {
     const task = await createTaskRow({ executionMode: 'queue' })
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
-    const sent = await schedulerEnv(stub, { EXECUTION_MODE: 'direct' })
+    const sent = await schedulerEnv(stub, {}, 'direct')
 
     await runDurableObjectAlarm(stub)
     expect(sent).toMatchObject([{ taskId: task.id, trigger: 'schedule' }])
@@ -110,7 +111,7 @@ describe('per-task execution mode: dispatch', () => {
     const task = await createTaskRow()
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
-    const sent = await schedulerEnv(stub, { EXECUTION_MODE: 'queue' })
+    const sent = await schedulerEnv(stub, {})
     await runDurableObjectAlarm(stub)
     expect(sent).toHaveLength(1)
   })
@@ -128,7 +129,7 @@ describe('per-task execution mode: dispatch', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect((await stub.status()).running).toBeNull()
     expect(error.mock.calls.some((args) => args.some((v) => String(v).includes('RUN_QUEUE binding is not configured')))).toBe(true)
-    expect(effectiveMode(withoutQueue(), { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
+    expect(await effectiveMode(withoutQueue(), { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
   })
 
   it('manual triggers follow the task mode', async () => {
@@ -141,13 +142,12 @@ describe('per-task execution mode: dispatch', () => {
     expect(sent).toEqual([])
   })
 
-  it('effectiveMode: task setting first, then EXECUTION_MODE', () => {
-    const queueEnv = Object.create(env, { EXECUTION_MODE: { value: 'queue' } }) as CloudflareBindings
-    const directEnv = Object.create(env, { EXECUTION_MODE: { value: 'direct' } }) as CloudflareBindings
-    expect(effectiveMode(queueEnv, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('queue')
-    expect(effectiveMode(queueEnv, { executionMode: 'direct', timeoutMs: 30_000 })).toBe('direct')
-    expect(effectiveMode(directEnv, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('direct')
-    expect(effectiveMode(directEnv, { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
+  it('effectiveMode: task setting first, then the current saved global mode', async () => {
+    expect(await effectiveMode(env, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('queue')
+    expect(await effectiveMode(env, { executionMode: 'direct', timeoutMs: 30_000 })).toBe('direct')
+    await setRuntimeSettings({ executionMode: 'direct' })
+    expect(await effectiveMode(env, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('direct')
+    expect(await effectiveMode(env, { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
   })
 })
 

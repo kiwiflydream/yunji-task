@@ -28,15 +28,15 @@
 | 执行器 | 可插拔注册表，v1 只有 `http`（URL / method / headers / body / 超时 / 成功关键字） |
 | 调度类型 | `cron`（6 段，秒级，带时区，默认 Asia/Shanghai）、`once`（指定时间执行一次，执行后自动停用）、`manual`（只能手动/API 触发） |
 | 调度引擎 | 每任务一个 SQLite 后端的 Durable Object，靠 alarm 实现秒级触发 |
-| 执行路径 | 每个任务可以单独设置（`executionMode`：`inherit` / `queue` / `direct` / `worker`），`inherit` 跟随全局的 `EXECUTION_MODE`（默认 `worker`）。见下文「执行方式」 |
+| 执行路径 | 每个任务可以单独设置（`executionMode`：`inherit` / `queue` / `direct` / `worker`），`inherit` 跟随设置页保存到 D1 的全局执行方式（默认 `worker`）。见下文「执行方式」 |
 | 错过的触发 | 不补跑。下一次触发时间总是从 `max(now, 本次计划时间)` 往后算 |
 | 重叠策略 | 每任务配置：`skip`（默认）/ `parallel`。skip 模式下 DO 记录 `running {runId, leaseUntil}`，消费者结束后调用 `complete(runId)` 释放；租约过期视为释放 |
 | 失败处理 | 重试次数 0–10、间隔 1–3600 秒，用 Queue `delaySeconds` 实现；最终失败调用告警 webhook |
 | 成功判定 | 2xx，且（如配置）响应体包含关键字。关键字在前 1MB 内匹配 |
 | 密钥 | `variables` 表，AES-GCM 加密（主密钥 `ENCRYPTION_KEY`，AAD = 变量名）。请求 URL / headers / body 与告警 URL 中用 `{{NAME}}` 引用；日志里出现的明文会被替换为 `***` |
 | 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom`。默认 POST 固定结构 JSON；可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
-| 日志 | 每次执行一行 `runs`，响应体截断 4KB，保留天数由 `RUN_RETENTION_DAYS` 配置（默认 30） |
-| 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数由 `STATS_RETENTION_DAYS` 配置（默认 90），与日志保留互相独立。详见下文「统计」 |
+| 日志 | 每次执行一行 `runs`，响应体截断 4KB，保留天数在设置页配置（默认 30） |
+| 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
 | 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version；对账每 5 分钟重放一次 |
 | 管理后台 | React + [Kumo](https://github.com/cloudflare/kumo) 单页应用（`web/`），Vite + `@cloudflare/vite-plugin` 构建为 Workers 静态资源。`run_worker_first` 只覆盖 `/`、`/health`、`/api/*`、`/admin`、`/admin/*`：`/admin/*` 先过后台认证再返回 HTML 壳，`/admin/api/*` 复用与 `/api` 相同的路由（只是认证方式不同）；`/assets/*` 下带 hash 的 JS/CSS 直接由静态资源返回（不含数据）。跟随系统深浅色。 |
 | 鉴权 | `/admin` 由 `ADMIN_AUTH_MODE` 选择：`basic`（默认，`ADMIN_USERNAME` + `ADMIN_PASSWORD`）或 `access`（Cloudflare Access JWT）；配置缺失或模式未知时返回 503（fail closed）；另有 CSRF Origin 校验。`/api` 用 `API_TOKEN` Bearer |
@@ -50,7 +50,7 @@
 - 抢占是幂等的，所以 Queue 重投一个已经抢占过的 run 不会再执行一次。Queue 的自动重投只在抢占之前出错（例如 D1 暂时不可用）时有用；direct 模式用 30 秒后重新投递来模拟（最多 3 次）。
 - once 任务触发后，DO 记录 `onceFiredVersion` 并尝试把 D1 中的任务停用（version + 1）；如果这一步失败，对账时会补做。
 
-## 执行方式（`EXECUTION_MODE`）
+## 执行方式
 
 三种方式下，调度器 DO 的 alarm 都先改状态、重新设 alarm，再把这次执行交出去，不阻塞下一次触发。区别在于谁去发 HTTP 请求：
 
@@ -66,7 +66,7 @@
 
 - **为什么 DO 等待要收费**：DO 按在内存中的墙钟时间计费，有未完成的出站请求时不能休眠；普通 Worker 只按 CPU 计费，等待 I/O 不收费。`worker` 方式让 DO 只做一次几毫秒的 RPC，等待落在 Worker 上。
 - **计费的两个未验证点**：DO 经 `ctx.exports` 调用 Worker 是否算一次 Worker 请求（按最坏情况算了）；`waitUntil` 里的等待是否确实只计 CPU（Workers 的计费规则如此，但文档没有针对 `waitUntil` 单独说明）。部署后在 Cloudflare 后台核对用量。
-- **执行方式与超时**：执行方式只由任务覆盖和 `EXECUTION_MODE` 决定，超时不参与路径选择。新任务的默认超时是 25 秒。保存时显式选 `worker`，或跟随当前全局 `worker`，超时超过 25 秒均返回 422。如果已有长超时任务因后续全局变更而使用 `worker`，仍交给 Worker，每次请求超时取任务设置与 25 秒的较小值；不修改存储配置，重试也遵守上限。`direct` / `queue` 使用任务原始超时。
+- **执行方式与超时**：执行方式只由任务覆盖和 D1 中的全局设置决定，超时不参与路径选择。新任务的默认超时是 25 秒。保存时显式选 `worker`，或跟随当前全局 `worker`，超时超过 25 秒均返回 422。如果已有长超时任务因后续全局变更而使用 `worker`，仍交给 Worker，每次请求超时取任务设置与 25 秒的较小值；不修改存储配置，重试也遵守上限。`direct` / `queue` 使用任务原始超时。
 - **部署时**：`direct` 和 `worker` 的请求都在 `waitUntil` 里，部署或运行时更新时可能被中断；被中断的 run 由丢失扫描标记为 failed，和 Queue 消费者崩溃的结果一样。
 - **按任务设置**：任务的 `executionMode` 默认是 `inherit`，也可以单独指定。这个字段和超时都在调度快照里，修改后版本号加 1 并同步到 DO。重试和槽位释放跟着这次执行实际走的路径，几种方式可以在同一个部署里同时存在。
 - **没有 Queue 的部署**：保存任务时显式选 `queue`，或跟随当前全局 `queue`，均返回 422。已有任务运行时选中了 `queue` 而绑定已被移除，则明确报错，不自动改走其他执行方式。
@@ -79,7 +79,7 @@
 - `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、时间、`http_status`、`response_body(≤4KB)`、`error`。
 - `run_stats_hourly`：主键 `(task_id, hour)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
-- `settings`：`key` → JSON（目前只有 `alert`）。
+- `settings`：`key` → JSON（`alert` 为全局告警，`runtime` 为运行设置）。
 
 下次触发时间不落库，列表页按 cron 现算，避免秒级任务每秒写 D1。
 
@@ -113,7 +113,7 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 
 插入 run 时会在同一条语句里确认任务还存在，所以不会产生按任务清理清不到的孤儿记录。
 
-统计行数只和任务数 × 小时数有关（100 个任务保留 90 天约 21.6 万行），与执行频率无关。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或调小 `RUN_RETENTION_DAYS`。
+统计行数只和任务数 × 小时数有关（100 个任务保留 90 天约 21.6 万行），与执行频率无关。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或在设置页调小日志保留天数。
 
 ## 配置
 
@@ -126,6 +126,16 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 | `ADMIN_USERNAME` | var | basic 模式用户名，默认 `admin` |
 | `ACCESS_TEAM_DOMAIN` | var | access 模式：例如 `myteam.cloudflareaccess.com` |
 | `ACCESS_AUD` | var | access 模式：Access 应用的 AUD tag |
-| `EXECUTION_MODE` | var | 全局默认的执行方式：`worker`（默认）、`queue` 或 `direct`，任务可以单独覆盖，见「执行方式」；未知值按 `worker` 处理并记录警告 |
-| `RUN_RETENTION_DAYS` | var | 执行日志保留天数，1–3650，默认 30；非法值按默认处理并记录警告 |
-| `STATS_RETENTION_DAYS` | var | 统计保留天数，1–3650，默认 90；非法值按默认处理并记录警告 |
+
+运行设置保存于 D1 `settings` 表的 `runtime` 键，无环境变量回退或旧数据迁移：
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `executionMode` | `worker` | 全局默认执行方式：`worker`、`queue` 或 `direct`，任务可单独覆盖 |
+| `retentionDays` | 30 | 执行日志保留天数，1–3650 的整数 |
+| `statsRetentionDays` | 90 | 统计保留天数，1–3650 的整数 |
+
+- **读写入口**：`GET/PUT /api/settings/runtime` 与 `/admin/api/settings/runtime`；PUT 校验完整配置、检查 Queue 绑定后整体保存。非法输入返回 422，保留原配置。`/admin/api/me` 同样读取最新设置。
+- **生效范围**：新触发的手动执行和定时执行在解析 `inherit` 时读取 D1；无进程内缓存，无需对所有 DO 推送或等待对账。每次继承全局方式的触发增加一次按主键读取配置的 D1 查询。任务显式覆盖不查询全局方式。
+- **已在途执行**：执行和重试保持已确定的 transport；Worker 的超时上限仍由执行入口强制限制。修改全局设置不重新安排 alarm，也不更改任务版本。
+- **保留策略**：每轮维护读取一次设置，分别用于日志和统计清理；下轮维护使用最新值，增加保留天数不会恢复已清理的数据。

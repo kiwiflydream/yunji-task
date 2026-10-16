@@ -10,7 +10,7 @@ import { captureQueue, createTaskRow, toSnapshot } from './helpers'
 
 beforeEach(async () => {
   // D1 is isolated per file, not per test; global alert settings would leak.
-  await env.DB.prepare('DELETE FROM settings').run()
+  await env.DB.prepare("DELETE FROM settings WHERE key = 'alert'").run()
 })
 
 afterEach(() => {
