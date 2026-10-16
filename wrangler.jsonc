@@ -60,6 +60,10 @@
     "crons": ["*/5 * * * *"]
   },
   "vars": {
+    // How runs are executed: "queue" (default) or "direct" (no Queues: the
+    // scheduler DO runs the HTTP call itself; cheaper for endpoints answering
+    // in under ~1s). For "direct" you may delete the "queues" section above.
+    "EXECUTION_MODE": "queue",
     // Admin UI auth: "basic" (ADMIN_USERNAME + ADMIN_PASSWORD secret) or "access" (Cloudflare Access).
     "ADMIN_AUTH_MODE": "basic",
     "ADMIN_USERNAME": "admin",

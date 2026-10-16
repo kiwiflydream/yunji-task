@@ -61,6 +61,7 @@ describe('basic auth (default mode)', () => {
       authMode: 'basic',
       retentionDays: 30,
       statsRetentionDays: 90,
+      executionMode: 'queue',
     })
   })
 

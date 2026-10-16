@@ -3,6 +3,7 @@ import { getTask } from '../domain/tasks-repo'
 import { resolveVariables } from '../domain/variables'
 import { redact, referencedVariables } from '../lib/template'
 import { sendFailureAlert } from './alert'
+import { runQueue } from './mode'
 import { getExecutor } from './registry'
 import type { ExecutionResult } from './types'
 
@@ -20,11 +21,39 @@ export async function handleRunBatch(batch: MessageBatch<RunMessage>, env: Cloud
   )
 }
 
+/**
+ * What differs between execution modes once an attempt has a result. Queue
+ * mode talks to the queue and the task's scheduler DO; direct mode runs inside
+ * that DO and handles all three locally.
+ */
+export interface RunTransport {
+  /** Schedule `next` (the following attempt) to run after `delaySeconds`. */
+  retry(next: RunMessage, delaySeconds: number): Promise<void>
+  /** The run reached a final outcome: free the skip-mode slot. Best effort. */
+  finished(msg: RunMessage): Promise<void>
+  /** The task no longer exists: stop its scheduler. Best effort. */
+  orphaned(msg: RunMessage): Promise<void>
+}
+
+export function queueTransport(env: CloudflareBindings): RunTransport {
+  return {
+    retry: async (next, delaySeconds) => {
+      await runQueue(env).send(next, { delaySeconds })
+    },
+    finished: (msg) => releaseSlot(env, msg),
+    orphaned: (msg) => destroyOrphanScheduler(env, msg),
+  }
+}
+
 /** Execute one attempt of a run. Throws only on infrastructure errors (D1/queue). */
-export async function processRun(msg: RunMessage, env: CloudflareBindings): Promise<void> {
+export async function processRun(
+  msg: RunMessage,
+  env: CloudflareBindings,
+  transport: RunTransport = queueTransport(env),
+): Promise<void> {
   const task = await getTask(env.DB, msg.taskId)
   if (!task) {
-    await destroyOrphanScheduler(env, msg)
+    await transport.orphaned(msg)
     return
   }
   if (!(await claimRun(env.DB, msg, Date.now()))) return // duplicate delivery
@@ -55,17 +84,17 @@ export async function processRun(msg: RunMessage, env: CloudflareBindings): Prom
   const now = Date.now()
   if (result.ok) {
     await recordAttempt(env.DB, msg.runId, 'success', result, now)
-    await releaseSlot(env, msg)
+    await transport.finished(msg)
     return
   }
   if (msg.attempt <= task.retry.count) {
     if (await recordAttempt(env.DB, msg.runId, 'retrying', result, now)) {
-      await env.RUN_QUEUE.send({ ...msg, attempt: msg.attempt + 1 }, { delaySeconds: task.retry.intervalSeconds })
+      await transport.retry({ ...msg, attempt: msg.attempt + 1 }, task.retry.intervalSeconds)
     }
     return
   }
   const recorded = await recordAttempt(env.DB, msg.runId, 'failed', result, now)
-  await releaseSlot(env, msg)
+  await transport.finished(msg)
   // Not recorded: the run was already closed as lost; don't alert on an outcome the log doesn't show.
   if (!recorded) return
   await sendFailureAlert(env, task, {

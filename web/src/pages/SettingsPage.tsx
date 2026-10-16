@@ -52,6 +52,12 @@ export function SettingsPage() {
                   ['当前用户', me.data.user],
                   ['日志保留', `${me.data.retentionDays} 天（RUN_RETENTION_DAYS）`],
                   ['统计保留', `${me.data.statsRetentionDays} 天（STATS_RETENTION_DAYS）`],
+                  [
+                    '执行方式',
+                    me.data.executionMode === 'direct'
+                      ? '直接执行：调度器 DO 自己发起请求（EXECUTION_MODE=direct）'
+                      : '队列：经 Queue 投递给消费者执行（EXECUTION_MODE=queue）',
+                  ],
                 ]}
               />
             ) : (

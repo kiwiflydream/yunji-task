@@ -50,6 +50,7 @@ export interface Issue {
 }
 
 export type AdminAuthMode = 'basic' | 'access'
+export type ExecutionMode = 'queue' | 'direct'
 
 /** GET /admin/api/me */
 export interface AdminMe {
@@ -57,6 +58,7 @@ export interface AdminMe {
   authMode: AdminAuthMode
   retentionDays: number
   statsRetentionDays: number
+  executionMode: ExecutionMode
 }
 
 export type StatsRange = '24h' | '7d' | '30d' | '90d'

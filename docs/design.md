@@ -28,7 +28,7 @@
 | 执行器 | 可插拔注册表，v1 只有 `http`（URL / method / headers / body / 超时 / 成功关键字） |
 | 调度类型 | `cron`（6 段，秒级，带时区，默认 Asia/Shanghai）、`once`（指定时间执行一次，执行后自动停用）、`manual`（只能手动/API 触发） |
 | 调度引擎 | 每任务一个 SQLite 后端的 Durable Object，靠 alarm 实现秒级触发 |
-| 执行路径 | 统一走 Queue。alarm 只负责：先 setAlarm(下一次)，再投递消息 |
+| 执行路径 | 由 `EXECUTION_MODE` 选择：`queue`（默认），alarm 先 setAlarm(下一次) 再投递消息，消费者执行；`direct`，不用 Queue，由调度器 DO 自己执行。见下文「执行方式」 |
 | 错过的触发 | 不补跑。下一次触发时间总是从 `max(now, 本次计划时间)` 往后算 |
 | 重叠策略 | 每任务配置：`skip`（默认）/ `parallel`。skip 模式下 DO 记录 `running {runId, leaseUntil}`，消费者结束后调用 `complete(runId)` 释放；租约过期视为释放 |
 | 失败处理 | 重试次数 0–10、间隔 1–3600 秒，用 Queue `delaySeconds` 实现；最终失败调用告警 webhook |
@@ -47,7 +47,24 @@
 - Queue 至少投递一次。每次执行有 `runId`：首次 `INSERT ... ON CONFLICT DO NOTHING` 抢占，重试用 `UPDATE ... WHERE status='retrying' AND attempt=n-1` 抢占，抢占失败即视为重复消息直接 ack。
 - 消费者抢占后崩溃会留下 `running` / `retrying` 状态的 run，对账任务会把超时（running 15 分钟、retrying 75 分钟）的 run 标记为 `failed`（lost）。宁可丢一次执行，也不重复调用下游。
 - DO alarm 处理函数不抛异常（避免 alarm 自动重试导致重复投递）；投递失败只记日志，由下一次触发继续。
+- 抢占是幂等的，所以 Queue 重投一个已经抢占过的 run 不会再执行一次。Queue 的自动重投只在抢占之前出错（例如 D1 暂时不可用）时有用；direct 模式用 30 秒后重新投递来模拟（最多 3 次）。
 - once 任务触发后，DO 记录 `onceFiredVersion` 并尝试把 D1 中的任务停用（version + 1）；如果这一步失败，对账时会补做。
+
+## 执行方式（`EXECUTION_MODE`）
+
+| | `queue`（默认） | `direct` |
+|---|---|---|
+| 谁执行 HTTP | Queue 消费者（Worker） | 调度器 DO：alarm 先改状态、重新设 alarm，再用 `ctx.waitUntil` 在后台执行，立刻返回，不阻塞下一次触发 |
+| 失败重试 | Queue `delaySeconds` | 存进 DO 存储（每个待执行一个 `pending:<runId>` 键，避免并发执行读改写同一个列表）；alarm 指向「下一次触发」和「最早的待执行」中较早的那个 |
+| skip 槽位释放 | 消费者调用 DO `complete()` | DO 内部直接释放 |
+| 手动触发 | 投递消息 | 调用 DO 的 `execute()` |
+| 每次执行的计费 | Queue 3 次操作、Worker 1 次请求、DO 2 次请求 | DO 1 次请求，加上 **HTTP 等待时长 × 128MB 的 DO duration** |
+| 适合 | 慢接口、高并发 | 免费套餐、对价格敏感、接口响应在 1 秒以内 |
+
+- **为什么默认用 Queue**：Worker 等待 HTTP 响应不计费，DO 等待要按墙钟时间计 duration。接口平均响应超过约 1 秒时，Queue 模式更便宜（Paid 套餐下 Queue 路径每百万次约 $1.5，DO 每秒约 $1.56 每百万次）。
+- **免费套餐**：Queue 每天 1 万次操作只够约 3300 次执行；direct 模式下瓶颈变成 D1 写入，约 1.6 万次每天。
+- **direct 模式的代价**：部署或运行时更新时，正在执行的请求最多有 30 秒宽限。被中断的 run 由丢失扫描标记为 failed，和 Queue 模式下消费者崩溃的结果一样。一个任务的所有执行都落在它自己那个 DO 上。DO 等待待处理 I/O 最多 15 分钟，超时上限 300 秒，在范围内。
+- 切换模式只改配置，不迁移数据。从 queue 切到 direct 时，Queue 里已经投递的消息需要旧的消费者跑完再删除队列。
 
 ## 数据模型（D1）
 
@@ -102,5 +119,6 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 | `ADMIN_USERNAME` | var | basic 模式用户名，默认 `admin` |
 | `ACCESS_TEAM_DOMAIN` | var | access 模式：例如 `myteam.cloudflareaccess.com` |
 | `ACCESS_AUD` | var | access 模式：Access 应用的 AUD tag |
+| `EXECUTION_MODE` | var | `queue`（默认）或 `direct`，见「执行方式」；未知值按 `queue` 处理并记录警告 |
 | `RUN_RETENTION_DAYS` | var | 执行日志保留天数，1–3650，默认 30；非法值按默认处理并记录警告 |
 | `STATS_RETENTION_DAYS` | var | 统计保留天数，1–3650，默认 90；非法值按默认处理并记录警告 |

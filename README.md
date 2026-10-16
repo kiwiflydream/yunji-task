@@ -32,7 +32,7 @@ pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.
 
 ```sh
 wrangler d1 create cf-task              # 把输出的 database_id 填进 wrangler.jsonc
-wrangler queues create cf-task-runs
+wrangler queues create cf-task-runs     # EXECUTION_MODE=direct 时不需要这两个队列
 wrangler queues create cf-task-runs-dlq
 pnpm db:migrate:remote
 wrangler secret put API_TOKEN           # 任意强随机字符串
@@ -50,8 +50,11 @@ pnpm deploy                             # vite build && wrangler deploy
 | `ADMIN_AUTH_MODE` | `basic` | 后台认证方式：`basic` 或 `access` |
 | `ADMIN_USERNAME` | `admin` | basic 模式用户名（密码是 secret `ADMIN_PASSWORD`） |
 | `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | 空 | access 模式必填 |
+| `EXECUTION_MODE` | `queue` | `queue`：经 Queue 执行；`direct`：调度器 DO 直接执行，不需要 Queues（适合免费套餐，以及接口响应在 1 秒以内的场景） |
 | `RUN_RETENTION_DAYS` | `30` | 执行日志保留天数（1–3650） |
 | `STATS_RETENTION_DAYS` | `90` | 小时级统计保留天数（1–3650），与日志保留互相独立 |
+
+使用 `direct` 模式：把 `EXECUTION_MODE` 设为 `direct`，并删掉 `wrangler.jsonc` 里的 `queues` 配置段，再部署。两种模式的取舍见 [docs/design.md](docs/design.md#执行方式execution_mode)。
 
 后台默认使用 basic 认证；没设置 `ADMIN_PASSWORD` 时 `/admin` 返回 503。改用 Cloudflare Access：在 Zero Trust 中为 `<你的域名>/admin` 创建 Self-hosted 应用，把 `ADMIN_AUTH_MODE` 设为 `access`，填入团队域名（如 `myteam.cloudflareaccess.com`）和应用的 AUD tag 后重新部署。`/api` 不受这两种方式影响，始终用 `Authorization: Bearer $API_TOKEN`。
 

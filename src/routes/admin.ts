@@ -3,6 +3,7 @@ import { csrf } from 'hono/csrf'
 import { secureHeaders } from 'hono/secure-headers'
 import { requireAdmin, type AdminVariables } from '../auth/admin'
 import { retentionDays, statsRetentionDays } from '../domain/runs-repo'
+import { executionMode } from '../executor/mode'
 import type { AdminMe } from '../shared/types'
 import { apiRoutes } from './api'
 
@@ -23,6 +24,7 @@ admin.get('/api/me', (c) =>
     authMode: c.env.ADMIN_AUTH_MODE?.trim() === 'access' ? 'access' : 'basic',
     retentionDays: retentionDays(c.env.RUN_RETENTION_DAYS),
     statsRetentionDays: statsRetentionDays(c.env.STATS_RETENTION_DAYS),
+    executionMode: executionMode(c.env),
   }),
 )
 admin.route('/api', apiRoutes)

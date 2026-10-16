@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
 import * as repo from './tasks-repo'
+import { executionMode, runQueue } from '../executor/mode'
 import { nextFireTime } from '../lib/schedule'
 
 import type { Issue } from '../shared/types'
@@ -91,6 +92,7 @@ export async function triggerTask(env: CloudflareBindings, id: string): Promise<
   if (!task) return null
   const now = Date.now()
   const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
-  await env.RUN_QUEUE.send(msg)
+  if (executionMode(env) === 'direct') await env.TASK_SCHEDULER.getByName(id).execute(msg)
+  else await runQueue(env).send(msg)
   return msg.runId
 }
