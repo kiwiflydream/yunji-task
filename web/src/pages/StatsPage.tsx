@@ -42,7 +42,7 @@ export default function StatsPage() {
           <Empty
             icon={<ChartBarIcon size={48} className="text-kumo-inactive" />}
             title="这段时间没有执行"
-            description="统计从启用统计功能后开始累计；任务执行后，这里会出现图表。"
+            description="任务执行后，这里会出现图表。"
           />
         </LayerCard>
       ) : (

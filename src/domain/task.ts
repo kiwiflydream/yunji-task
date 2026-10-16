@@ -137,8 +137,7 @@ export interface ScheduleSnapshot extends ScheduleSpec {
   overlapPolicy: OverlapPolicy
   /** How long a dispatched run may hold the skip-mode "running" slot. */
   leaseMs: number
-  /** Absent in snapshots stored before per-task modes existed; treated as `inherit`. */
-  executionMode?: TaskExecutionMode
+  executionMode: TaskExecutionMode
 }
 
 export function toSnapshot(task: Task): ScheduleSnapshot {

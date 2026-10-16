@@ -27,8 +27,8 @@ export function hasRunQueue(env: CloudflareBindings): boolean {
  * EXECUTION_MODE. Queue mode without the binding falls back to direct (with a
  * warning) so a misconfiguration never silently stops a task.
  */
-export function effectiveMode(env: CloudflareBindings, taskMode: TaskExecutionMode | undefined): ExecutionMode {
-  const mode = !taskMode || taskMode === 'inherit' ? executionMode(env) : taskMode
+export function effectiveMode(env: CloudflareBindings, taskMode: TaskExecutionMode): ExecutionMode {
+  const mode = taskMode === 'inherit' ? executionMode(env) : taskMode
   if (mode === 'queue' && !hasRunQueue(env)) {
     console.warn('queue mode selected but the RUN_QUEUE binding is not configured; executing directly')
     return 'direct'

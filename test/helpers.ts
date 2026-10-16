@@ -29,6 +29,7 @@ export function snapshotFor(overrides: Partial<ScheduleSnapshot> = {}): Schedule
     runAt: null,
     overlapPolicy: 'skip',
     leaseMs: 60_000,
+    executionMode: 'inherit',
     ...overrides,
   }
 }

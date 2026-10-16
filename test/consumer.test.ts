@@ -238,7 +238,7 @@ describe('orphan scheduler', () => {
     const stub = env.TASK_SCHEDULER.getByName(taskId)
     await stub.sync({
       taskId, version: 1, enabled: true, scheduleType: 'cron', cron: '* * * * * *',
-      timezone: 'UTC', runAt: null, overlapPolicy: 'skip', leaseMs: 1000,
+      timezone: 'UTC', runAt: null, overlapPolicy: 'skip', leaseMs: 1000, executionMode: 'inherit',
     })
     expect((await stub.status()).alarmAt).not.toBeNull()
     await processRun(message(taskId, { trigger: 'schedule' }), envWithQueue().env)

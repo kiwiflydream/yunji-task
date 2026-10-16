@@ -135,7 +135,6 @@ describe('per-task execution mode: dispatch', () => {
   it('effectiveMode: task setting first, then EXECUTION_MODE', () => {
     const queueEnv = Object.create(env, { EXECUTION_MODE: { value: 'queue' } }) as CloudflareBindings
     const directEnv = Object.create(env, { EXECUTION_MODE: { value: 'direct' } }) as CloudflareBindings
-    expect(effectiveMode(queueEnv, undefined)).toBe('queue')
     expect(effectiveMode(queueEnv, 'inherit')).toBe('queue')
     expect(effectiveMode(queueEnv, 'direct')).toBe('direct')
     expect(effectiveMode(directEnv, 'inherit')).toBe('direct')
