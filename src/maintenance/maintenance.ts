@@ -1,10 +1,13 @@
-import { DAY_MS, markLostRuns, purgeOldRuns, retentionDays, statsRetentionDays } from '../domain/runs-repo'
+import { DAY_MS, markLostRuns, PURGE_BATCH, purgeOldRuns, retentionDays, statsRetentionDays } from '../domain/runs-repo'
 import { purgeOldStats } from '../domain/stats-repo'
 import { syncScheduler } from '../domain/task-service'
 import { listAllTasks } from '../domain/tasks-repo'
 
 const SYNC_CONCURRENCY = 20
 const MAX_PURGE_BATCHES = 4
+/** Tasks purged per D1 batch, and the per-run cap on purged runs (a backlog drains over several runs). */
+const PURGE_TASKS_PER_BATCH = 20
+const MAX_PURGED_RUNS = 20_000
 
 export interface MaintenanceReport {
   tasks: number
@@ -29,12 +32,21 @@ export async function runMaintenance(env: CloudflareBindings, now = Date.now()):
 
   const lostRuns = await markLostRuns(env.DB, now)
 
-  const days = retentionDays(env.RUN_RETENTION_DAYS)
+  const runsCutoff = now - retentionDays(env.RUN_RETENTION_DAYS) * DAY_MS
   let purgedRuns = 0
-  for (let i = 0; i < MAX_PURGE_BATCHES; i++) {
-    const n = await purgeOldRuns(env.DB, now, days)
-    purgedRuns += n
-    if (n === 0) break
+  let pending = tasks.map((t) => t.id)
+  // Tasks that hit the per-statement limit still have a backlog; go round again.
+  while (pending.length > 0 && purgedRuns < MAX_PURGED_RUNS) {
+    const backlog: string[] = []
+    for (let i = 0; i < pending.length && purgedRuns < MAX_PURGED_RUNS; i += PURGE_TASKS_PER_BATCH) {
+      const chunk = pending.slice(i, i + PURGE_TASKS_PER_BATCH)
+      const counts = await purgeOldRuns(env.DB, chunk, runsCutoff)
+      counts.forEach((n, j) => {
+        purgedRuns += n
+        if (n === PURGE_BATCH) backlog.push(chunk[j])
+      })
+    }
+    pending = backlog
   }
 
   const statsCutoff = now - statsRetentionDays(env.STATS_RETENTION_DAYS) * DAY_MS

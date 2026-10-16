@@ -77,7 +77,14 @@ export function statsRetentionDays(raw: string | undefined): number {
 }
 
 export const DAY_MS = 24 * 60 * 60_000
-export const PURGE_BATCH = 5000
+export const PURGE_BATCH = 1000
+
+/**
+ * Runs are only inserted while their task exists (checked atomically), so
+ * deleting a task's runs together with the task leaves no orphans, and
+ * retention can purge task by task.
+ */
+const TASK_EXISTS = 'WHERE EXISTS (SELECT 1 FROM tasks WHERE id = ?)'
 
 export async function insertSkippedRun(
   db: D1Database,
@@ -88,16 +95,16 @@ export async function insertSkippedRun(
     db
       .prepare(
         `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, finished_at, error, created_at, updated_at)
-         VALUES (?, ?, 'schedule', 'skipped', 0, ?, ?, ?, ?, ?)`,
+         SELECT ?, ?, 'schedule', 'skipped', 0, ?, ?, ?, ?, ? ${TASK_EXISTS}`,
       )
-      .bind(crypto.randomUUID(), run.taskId, run.scheduledAt, now, run.reason, now, now),
+      .bind(crypto.randomUUID(), run.taskId, run.scheduledAt, now, run.reason, now, now, run.taskId),
     skippedStatement(db, run.taskId, run.scheduledAt),
   ])
 }
 
 /**
- * Claim an attempt of a run. Returns false for duplicate queue deliveries,
- * which must be acked without executing.
+ * Claim an attempt of a run. Returns false for duplicate queue deliveries and
+ * for tasks deleted meanwhile; both must be acked without executing.
  */
 export async function claimRun(db: D1Database, msg: RunMessage, now: number): Promise<boolean> {
   const res =
@@ -105,9 +112,9 @@ export async function claimRun(db: D1Database, msg: RunMessage, now: number): Pr
       ? await db
           .prepare(
             `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, started_at, created_at, updated_at)
-             VALUES (?, ?, ?, 'running', 1, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+             SELECT ?, ?, ?, 'running', 1, ?, ?, ?, ? ${TASK_EXISTS} ON CONFLICT (id) DO NOTHING`,
           )
-          .bind(msg.runId, msg.taskId, msg.trigger, msg.scheduledAt, now, now, now)
+          .bind(msg.runId, msg.taskId, msg.trigger, msg.scheduledAt, now, now, now, msg.taskId)
           .run()
       : await db
           .prepare(
@@ -173,7 +180,13 @@ export async function listRuns(
   return results.map(rowToRun)
 }
 
-const LOST_WHERE = `(status = 'running' AND updated_at < ?) OR (status = 'retrying' AND updated_at < ?)`
+/**
+ * Stale in-flight runs: running for RUNNING_STALE_MS or retrying for
+ * RETRYING_STALE_MS (the longer one) without an update. The first term must
+ * match idx_runs_inflight's WHERE clause verbatim for SQLite to use that
+ * partial index instead of scanning every run.
+ */
+export const LOST_WHERE = `status IN ('running', 'retrying') AND updated_at < ? AND (status = 'running' OR updated_at < ?)`
 
 /** Runs whose consumer died mid-flight never report back; close them out (counted as failed). */
 export async function markLostRuns(db: D1Database, now: number): Promise<number> {
@@ -191,10 +204,13 @@ export async function markLostRuns(db: D1Database, now: number): Promise<number>
   return res.meta.changes
 }
 
-export async function purgeOldRuns(db: D1Database, now: number, days: number): Promise<number> {
-  const res = await db
-    .prepare(`DELETE FROM runs WHERE id IN (SELECT id FROM runs WHERE created_at < ? LIMIT ${PURGE_BATCH})`)
-    .bind(now - days * DAY_MS)
-    .run()
-  return res.meta.changes
+export const PURGE_RUNS_SQL = `DELETE FROM runs WHERE id IN
+  (SELECT id FROM runs WHERE task_id = ? AND created_at < ? LIMIT ${PURGE_BATCH})`
+
+/** Delete up to PURGE_BATCH runs per task created before `cutoff`; returns the count per task. */
+export async function purgeOldRuns(db: D1Database, taskIds: string[], cutoff: number): Promise<number[]> {
+  if (taskIds.length === 0) return []
+  const stmt = db.prepare(PURGE_RUNS_SQL)
+  const results = await db.batch(taskIds.map((id) => stmt.bind(id, cutoff)))
+  return results.map((r) => r.meta.changes)
 }

@@ -52,7 +52,7 @@
 ## 数据模型（D1）
 
 - `tasks`：配置（扁平列 + `executor_config` / `alert_config` JSON）、`version`。
-- `runs`：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、时间、`http_status`、`response_body(≤4KB)`、`error`。
+- `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、时间、`http_status`、`response_body(≤4KB)`、`error`。
 - `run_stats_hourly`：主键 `(task_id, hour)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
 - `settings`：`key` → JSON（目前只有 `alert`）。
@@ -72,7 +72,24 @@
 
 ## 容量提示
 
-秒级任务每次执行约 2 次 D1 行写入 + 索引写入，另加 1 次统计行 upsert。统计行数只和任务数 × 小时数有关（100 个任务保留 90 天约 21.6 万行），与执行频率无关。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或调小 `RUN_RETENTION_DAYS`。
+D1 按写入行数计费，写操作碰到的每个索引都算额外一行。一次成功执行的完整生命周期实测（`test/cost.test.ts` 固定了这些数字）：
+
+| 步骤 | 写入行数 |
+|---|---|
+| 抢占（INSERT） | 3：表本身 + 按任务的索引 + 执行中索引 |
+| 记录结果（UPDATE） | 1：离开执行中索引不计费 |
+| 统计 upsert | 1（该小时第一次执行为 2） |
+| 到期清理（DELETE） | 1 |
+| **合计** | **约 6** |
+
+跳过的执行约 4 行（不进入执行中索引）。为此 `runs` 是 `WITHOUT ROWID` 表（TEXT 主键不再额外维护一个唯一索引），只保留两个索引：
+
+- `(task_id, created_at)`：列表和按任务清理都用它。
+- `updated_at WHERE status IN ('running','retrying')` 部分索引：给丢失 run 的扫描用。
+
+迁移 `0003` 之前合计约 9 行。插入 run 时会在同一条语句里确认任务还存在，所以不会产生按任务清理清不到的孤儿记录。
+
+统计行数只和任务数 × 小时数有关（100 个任务保留 90 天约 21.6 万行），与执行频率无关。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或调小 `RUN_RETENTION_DAYS`。
 
 ## 配置
 
