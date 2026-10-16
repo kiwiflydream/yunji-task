@@ -3,7 +3,7 @@ import type { ScheduleSnapshot } from '../domain/task'
 import { disableFiredOnceTask } from '../domain/tasks-repo'
 import { insertSkippedRun, type RunMessage } from '../domain/runs-repo'
 import { processRun, type RunTransport } from '../executor/consumer'
-import { executionMode, runQueue } from '../executor/mode'
+import { effectiveMode, runQueue } from '../executor/mode'
 import { nextFireTime } from '../lib/schedule'
 
 import type { RunningSlot, SchedulerStatus } from '../shared/types'
@@ -31,7 +31,7 @@ const REDELIVERY_DELAY_MS = 30_000
 /**
  * One instance per task (name = taskId). Owns the task's alarm. In queue mode
  * it only dispatches RunMessages to the queue; in direct mode it also executes
- * them (see EXECUTION_MODE) and keeps their pending retries, sharing the one
+ * them (the task's executionMode, else EXECUTION_MODE) and keeps their pending retries, sharing the one
  * alarm between the next fire and the earliest pending attempt.
  */
 export class TaskScheduler extends DurableObject<CloudflareBindings> {
@@ -174,7 +174,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       }
       // Take the slot before handing the run off so a fast finish cannot race ahead of it.
       if (skip) await storage.put(K_RUNNING, { runId: msg.runId, leaseUntil: now + snapshot.leaseMs })
-      if (executionMode(this.env) === 'direct') {
+      if (effectiveMode(this.env, snapshot.executionMode) === 'direct') {
         this.start({ msg, dueAt: now, deliveries: 0 })
         return
       }

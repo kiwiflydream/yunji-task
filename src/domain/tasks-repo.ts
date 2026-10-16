@@ -17,6 +17,7 @@ function columns(input: TaskInput) {
     retry_count: input.retry.count,
     retry_interval_seconds: input.retry.intervalSeconds,
     alert_config: JSON.stringify(input.alert),
+    execution_mode: input.executionMode,
   }
 }
 
@@ -44,13 +45,13 @@ export async function insertTask(db: D1Database, input: TaskInput, now: number):
     .prepare(
       `INSERT INTO tasks (id, name, description, enabled, schedule_type, cron, timezone, run_at,
         executor_type, executor_config, overlap_policy, retry_count, retry_interval_seconds, alert_config,
-        version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING *`,
+        execution_mode, version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING *`,
     )
     .bind(
       id, c.name, c.description, c.enabled, c.schedule_type, c.cron, c.timezone, c.run_at,
       c.executor_type, c.executor_config, c.overlap_policy, c.retry_count, c.retry_interval_seconds, c.alert_config,
-      now, now,
+      c.execution_mode, now, now,
     )
     .first<TaskRow>()
   return rowToTask(row!)
@@ -62,13 +63,13 @@ export async function updateTask(db: D1Database, id: string, input: TaskInput, n
     .prepare(
       `UPDATE tasks SET name = ?, description = ?, enabled = ?, schedule_type = ?, cron = ?, timezone = ?, run_at = ?,
         executor_type = ?, executor_config = ?, overlap_policy = ?, retry_count = ?, retry_interval_seconds = ?,
-        alert_config = ?, version = version + 1, updated_at = ?
+        alert_config = ?, execution_mode = ?, version = version + 1, updated_at = ?
        WHERE id = ? RETURNING *`,
     )
     .bind(
       c.name, c.description, c.enabled, c.schedule_type, c.cron, c.timezone, c.run_at,
       c.executor_type, c.executor_config, c.overlap_policy, c.retry_count, c.retry_interval_seconds,
-      c.alert_config, now, id,
+      c.alert_config, c.execution_mode, now, id,
     )
     .first<TaskRow>()
   return row ? rowToTask(row) : null

@@ -1,4 +1,4 @@
-import type { ExecutionMode } from '../shared/types'
+import type { ExecutionMode, TaskExecutionMode } from '../shared/types'
 
 /**
  * EXECUTION_MODE selects how runs reach the executor:
@@ -15,6 +15,25 @@ export function executionMode(env: { EXECUTION_MODE?: string }): ExecutionMode {
   if (value === 'direct') return 'direct'
   console.warn(`invalid EXECUTION_MODE "${value}", using queue`)
   return 'queue'
+}
+
+/** Whether the RUN_QUEUE binding is configured. */
+export function hasRunQueue(env: CloudflareBindings): boolean {
+  return !!(env as { RUN_QUEUE?: Queue }).RUN_QUEUE
+}
+
+/**
+ * The mode a task's runs actually use: the task's own setting, else
+ * EXECUTION_MODE. Queue mode without the binding falls back to direct (with a
+ * warning) so a misconfiguration never silently stops a task.
+ */
+export function effectiveMode(env: CloudflareBindings, taskMode: TaskExecutionMode | undefined): ExecutionMode {
+  const mode = !taskMode || taskMode === 'inherit' ? executionMode(env) : taskMode
+  if (mode === 'queue' && !hasRunQueue(env)) {
+    console.warn('queue mode selected but the RUN_QUEUE binding is not configured; executing directly')
+    return 'direct'
+  }
+  return mode
 }
 
 /**

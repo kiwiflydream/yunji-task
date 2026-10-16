@@ -23,6 +23,7 @@ import type { Issue } from '../../../src/shared/types'
 import { api, ApiError } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner, PageLoader } from '../components/States'
+import { MODE_LABEL, suggestionText } from '../lib/execution-mode'
 import { fmtTime } from '../lib/format'
 import {
   emptyTaskForm,
@@ -243,6 +244,12 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
         </Section>
 
         <Section title="执行策略">
+          <ExecutionModeField
+            taskId={id}
+            value={f.executionMode}
+            onChange={(v) => set('executionMode', v)}
+            error={errors.executionMode}
+          />
           <Radio.Group
             legend="上次执行未结束时"
             orientation="horizontal"
@@ -319,6 +326,52 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
         </div>
       </form>
     </>
+  )
+}
+
+function ExecutionModeField({
+  taskId,
+  value,
+  onChange,
+  error,
+}: {
+  taskId?: string
+  value: TaskFormState['executionMode']
+  onChange: (v: TaskFormState['executionMode']) => void
+  error?: string
+}) {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
+  // Suggest from this task's own recent durations (editing only).
+  const stats = useQuery({
+    queryKey: ['stats', 'task', taskId, '7d'],
+    queryFn: () => api.taskStats(taskId!, '7d'),
+    enabled: !!taskId,
+  })
+  const queueAvailable = me.data?.queueAvailable ?? true
+  const p95 = stats.data?.summary.durationP95 ?? null
+  return (
+    <Radio.Group
+      legend="执行方式"
+      appearance="card"
+      orientation="horizontal"
+      value={value}
+      onValueChange={(v) => onChange(v as TaskFormState['executionMode'])}
+      error={error}
+      description={!taskId || stats.data ? suggestionText(p95, queueAvailable) : undefined}
+    >
+      <Radio.Item
+        label="跟随全局"
+        value="inherit"
+        description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（EXECUTION_MODE）` : 'EXECUTION_MODE'}
+      />
+      <Radio.Item
+        label={MODE_LABEL.queue}
+        value="queue"
+        disabled={!queueAvailable && value !== 'queue'}
+        description={queueAvailable ? '经 Queue 投递执行，适合响应慢的接口' : '当前部署没有配置 Queue'}
+      />
+      <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，不经过 Queue" />
+    </Radio.Group>
   )
 }
 

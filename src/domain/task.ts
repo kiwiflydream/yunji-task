@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { executorSpecSchema, type ExecutorSpec } from '../executor/registry'
 import { validateCron, type ScheduleSpec, type ScheduleType } from '../lib/schedule'
 import { DEFAULT_TIMEZONE, isValidTimezone } from '../lib/time'
+import type { TaskExecutionMode } from '../shared/types'
 
 // Validation messages surface in the (Chinese) admin UI.
 z.config(z.locales.zhCN())
@@ -55,6 +56,7 @@ export const taskInputSchema = z.object({
     })
     .default({ count: 0, intervalSeconds: 10 }),
   alert: alertSchema.default({ mode: 'inherit' }),
+  executionMode: z.enum(['inherit', 'queue', 'direct']).default('inherit'),
 })
 
 export type TaskInput = z.output<typeof taskInputSchema>
@@ -89,6 +91,7 @@ export interface TaskRow {
   retry_count: number
   retry_interval_seconds: number
   alert_config: string
+  execution_mode: TaskExecutionMode
   version: number
   created_at: number
   updated_at: number
@@ -109,6 +112,7 @@ export function rowToTask(row: TaskRow): Task {
     overlapPolicy: row.overlap_policy,
     retry: { count: row.retry_count, intervalSeconds: row.retry_interval_seconds },
     alert: JSON.parse(row.alert_config) as AlertConfig,
+    executionMode: row.execution_mode,
     version: row.version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -133,6 +137,8 @@ export interface ScheduleSnapshot extends ScheduleSpec {
   overlapPolicy: OverlapPolicy
   /** How long a dispatched run may hold the skip-mode "running" slot. */
   leaseMs: number
+  /** Absent in snapshots stored before per-task modes existed; treated as `inherit`. */
+  executionMode?: TaskExecutionMode
 }
 
 export function toSnapshot(task: Task): ScheduleSnapshot {
@@ -145,5 +151,6 @@ export function toSnapshot(task: Task): ScheduleSnapshot {
     enabled: task.enabled,
     overlapPolicy: task.overlapPolicy,
     leaseMs,
+    executionMode: task.executionMode,
   }
 }

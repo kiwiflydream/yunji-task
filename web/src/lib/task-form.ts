@@ -1,6 +1,6 @@
 import type { Task, TaskInputRaw } from '../../../src/domain/task'
 import { DEFAULT_TIMEZONE, toDatetimeLocal, zonedTimeToEpoch } from '../../../src/lib/time'
-import type { Issue } from '../../../src/shared/types'
+import type { Issue, TaskExecutionMode } from '../../../src/shared/types'
 
 export interface HeaderRow {
   key: string
@@ -31,6 +31,7 @@ export interface TaskFormState {
   alertMode: AlertMode
   alertUrl: string
   alertBodyTemplate: string
+  executionMode: TaskExecutionMode
 }
 
 export type FormField = keyof TaskFormState
@@ -55,6 +56,7 @@ export const emptyTaskForm: TaskFormState = {
   alertMode: 'inherit',
   alertUrl: '',
   alertBodyTemplate: '',
+  executionMode: 'inherit',
 }
 
 export function taskToForm(task: Task): TaskFormState {
@@ -80,6 +82,7 @@ export function taskToForm(task: Task): TaskFormState {
     alertMode: task.alert.mode,
     alertUrl: task.alert.mode === 'custom' ? task.alert.url : '',
     alertBodyTemplate: task.alert.mode === 'custom' ? task.alert.bodyTemplate : '',
+    executionMode: task.executionMode,
   }
 }
 
@@ -134,6 +137,7 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
         f.alertMode === 'custom'
           ? { mode: 'custom', url: f.alertUrl, bodyTemplate: f.alertBodyTemplate }
           : { mode: f.alertMode },
+      executionMode: f.executionMode,
     },
   }
 }
@@ -155,6 +159,7 @@ const PATH_TO_FIELD: [prefix: string, field: FormField][] = [
   ['retry.intervalSeconds', 'retryIntervalSeconds'],
   ['alert.url', 'alertUrl'],
   ['alert.bodyTemplate', 'alertBodyTemplate'],
+  ['executionMode', 'executionMode'],
 ]
 
 /** The server validates milliseconds; the form edits seconds. */

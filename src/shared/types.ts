@@ -51,6 +51,8 @@ export interface Issue {
 
 export type AdminAuthMode = 'basic' | 'access'
 export type ExecutionMode = 'queue' | 'direct'
+/** A task's own setting; `inherit` follows EXECUTION_MODE. */
+export type TaskExecutionMode = 'inherit' | ExecutionMode
 
 /** GET /admin/api/me */
 export interface AdminMe {
@@ -58,7 +60,10 @@ export interface AdminMe {
   authMode: AdminAuthMode
   retentionDays: number
   statsRetentionDays: number
+  /** The global default (EXECUTION_MODE). */
   executionMode: ExecutionMode
+  /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
+  queueAvailable: boolean
 }
 
 export type StatsRange = '24h' | '7d' | '30d' | '90d'

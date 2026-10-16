@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
 import * as repo from './tasks-repo'
-import { executionMode, runQueue } from '../executor/mode'
+import { effectiveMode, hasRunQueue, runQueue } from '../executor/mode'
 import { nextFireTime } from '../lib/schedule'
 
 import type { Issue } from '../shared/types'
@@ -20,10 +20,15 @@ export function zodIssues(error: z.ZodError): Issue[] {
 }
 
 /** Validate raw input (JSON or form-derived) into a TaskInput. */
-export function parseTaskInput(raw: unknown, now: number): TaskInput {
+export function parseTaskInput(raw: unknown, now: number, env?: CloudflareBindings): TaskInput {
   const parsed = taskInputSchema.safeParse(raw)
   if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
   assertRunnable(parsed.data, now)
+  if (env && parsed.data.executionMode === 'queue' && !hasRunQueue(env)) {
+    throw new ValidationError([
+      { path: 'executionMode', message: '当前部署没有配置 Queue（wrangler.jsonc 的 queues），不能选择队列执行' },
+    ])
+  }
   return parsed.data
 }
 
@@ -52,14 +57,14 @@ export async function syncScheduler(env: CloudflareBindings, task: Task): Promis
 
 export async function createTask(env: CloudflareBindings, raw: unknown): Promise<Task> {
   const now = Date.now()
-  const task = await repo.insertTask(env.DB, parseTaskInput(raw, now), now)
+  const task = await repo.insertTask(env.DB, parseTaskInput(raw, now, env), now)
   await syncScheduler(env, task)
   return task
 }
 
 export async function updateTask(env: CloudflareBindings, id: string, raw: unknown): Promise<Task | null> {
   const now = Date.now()
-  const task = await repo.updateTask(env.DB, id, parseTaskInput(raw, now), now)
+  const task = await repo.updateTask(env.DB, id, parseTaskInput(raw, now, env), now)
   if (task) await syncScheduler(env, task)
   return task
 }
@@ -92,7 +97,7 @@ export async function triggerTask(env: CloudflareBindings, id: string): Promise<
   if (!task) return null
   const now = Date.now()
   const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
-  if (executionMode(env) === 'direct') await env.TASK_SCHEDULER.getByName(id).execute(msg)
+  if (effectiveMode(env, task.executionMode) === 'direct') await env.TASK_SCHEDULER.getByName(id).execute(msg)
   else await runQueue(env).send(msg)
   return msg.runId
 }

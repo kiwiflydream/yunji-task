@@ -50,7 +50,7 @@ pnpm deploy                             # vite build && wrangler deploy
 | `ADMIN_AUTH_MODE` | `basic` | 后台认证方式：`basic` 或 `access` |
 | `ADMIN_USERNAME` | `admin` | basic 模式用户名（密码是 secret `ADMIN_PASSWORD`） |
 | `ACCESS_TEAM_DOMAIN` / `ACCESS_AUD` | 空 | access 模式必填 |
-| `EXECUTION_MODE` | `queue` | `queue`：经 Queue 执行；`direct`：调度器 DO 直接执行，不需要 Queues（适合免费套餐，以及接口响应在 1 秒以内的场景） |
+| `EXECUTION_MODE` | `queue` | 全局默认的执行方式。`queue`：经 Queue 执行；`direct`：调度器 DO 直接执行，不需要 Queues（适合免费套餐，以及接口响应在 1 秒以内的场景）。任务可以用 `executionMode` 单独覆盖 |
 | `RUN_RETENTION_DAYS` | `30` | 执行日志保留天数（1–3650） |
 | `STATS_RETENTION_DAYS` | `90` | 小时级统计保留天数（1–3650），与日志保留互相独立 |
 
@@ -77,6 +77,7 @@ curl -X POST https://<host>/api/tasks -H "Authorization: Bearer $API_TOKEN" -H '
   "name": "每 10 秒心跳",
   "schedule": { "type": "cron", "cron": "*/10 * * * * *", "timezone": "Asia/Shanghai" },
   "executor": { "type": "http", "config": { "url": "https://example.com/ping", "headers": { "Authorization": "Bearer {{PING_TOKEN}}" } } },
-  "retry": { "count": 2, "intervalSeconds": 30 }
+  "retry": { "count": 2, "intervalSeconds": 30 },
+  "executionMode": "inherit"
 }'
 ```

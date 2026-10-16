@@ -12,6 +12,7 @@ import { RunDialog } from '../components/RunDialog'
 import { ErrorBanner, NotFound, PageLoader } from '../components/States'
 import { TaskMenu } from '../components/TaskMenu'
 import { useTaskActions } from '../components/useTaskActions'
+import { describeTaskMode } from '../lib/execution-mode'
 import { fmtDuration, fmtRelative, fmtTime } from '../lib/format'
 
 const TaskStats = lazy(() => import('../components/TaskStats'))
@@ -74,6 +75,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function ScheduleCard({ task }: { task: TaskView }) {
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: Infinity })
   const scheduler = useQuery({
     queryKey: ['scheduler', task.id],
     queryFn: () => api.scheduler(task.id),
@@ -92,6 +94,7 @@ function ScheduleCard({ task }: { task: TaskView }) {
     '失败重试',
     task.retry.count === 0 ? '不重试' : `${task.retry.count} 次，间隔 ${task.retry.intervalSeconds} 秒`,
   ])
+  if (me.data) items.push(['执行方式', describeTaskMode(task.executionMode, me.data)])
   items.push([
     '失败告警',
     task.alert.mode === 'inherit' ? '使用全局设置' : task.alert.mode === 'off' ? '关闭' : task.alert.url,
