@@ -1,20 +1,26 @@
-import type { ExecutionMode, TaskExecutionMode } from '../shared/types'
+import { WORKER_MAX_TIMEOUT_MS, type ExecutionMode, type TaskExecutionMode } from '../shared/types'
+
+export { WORKER_MAX_TIMEOUT_MS }
 
 /**
  * EXECUTION_MODE selects how runs reach the executor:
- * - `queue` (default): the scheduler DO enqueues a message; the queue consumer
+ * - `queue`: the scheduler DO enqueues a message; the queue consumer
  *   executes it and retries via delayed messages.
  * - `direct`: the scheduler DO executes runs itself (in `waitUntil`) and keeps
- *   pending retries in its own storage. No Queues needed: cheaper for fast
- *   endpoints, but the DO is billed for the wall time of each HTTP call.
- * Unknown values fall back to `queue`.
+ *   pending retries in its own storage. No Queues needed, but the DO is billed
+ *   for the wall time of each HTTP call.
+ * - `worker` (default): the scheduler DO hands each run to the RunExecutor entrypoint
+ *   over `ctx.exports`, which executes it in its own `waitUntil` (billed by CPU
+ *   only). Retries are kept by the DO as in direct mode. Each request's timeout
+ *   is capped at WORKER_MAX_TIMEOUT_MS to fit waitUntil's 30 s budget.
+ * Unknown values fall back to `worker`.
  */
 export function executionMode(env: { EXECUTION_MODE?: string }): ExecutionMode {
   const value = env.EXECUTION_MODE?.trim() ?? ''
-  if (value === '' || value === 'queue') return 'queue'
-  if (value === 'direct') return 'direct'
-  console.warn(`invalid EXECUTION_MODE "${value}", using queue`)
-  return 'queue'
+  if (value === '' || value === 'worker') return 'worker'
+  if (value === 'direct' || value === 'queue') return value
+  console.warn(`invalid EXECUTION_MODE "${value}", using worker`)
+  return 'worker'
 }
 
 /** Whether the RUN_QUEUE binding is configured. */
@@ -24,16 +30,14 @@ export function hasRunQueue(env: CloudflareBindings): boolean {
 
 /**
  * The mode a task's runs actually use: the task's own setting, else
- * EXECUTION_MODE. Queue mode without the binding falls back to direct (with a
- * warning) so a misconfiguration never silently stops a task.
+ * EXECUTION_MODE.
+ * Timeout and binding availability never change the selected mode.
  */
-export function effectiveMode(env: CloudflareBindings, taskMode: TaskExecutionMode): ExecutionMode {
-  const mode = taskMode === 'inherit' ? executionMode(env) : taskMode
-  if (mode === 'queue' && !hasRunQueue(env)) {
-    console.warn('queue mode selected but the RUN_QUEUE binding is not configured; executing directly')
-    return 'direct'
-  }
-  return mode
+export function effectiveMode(
+  env: CloudflareBindings,
+  task: { executionMode: TaskExecutionMode; timeoutMs: number },
+): ExecutionMode {
+  return task.executionMode === 'inherit' ? executionMode(env) : task.executionMode
 }
 
 /**

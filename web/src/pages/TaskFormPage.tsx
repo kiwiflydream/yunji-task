@@ -23,7 +23,7 @@ import type { Issue } from '../../../src/shared/types'
 import { api, ApiError } from '../api'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner, PageLoader } from '../components/States'
-import { MODE_LABEL, suggestionText } from '../lib/execution-mode'
+import { MODE_LABEL, suggestionText, WORKER_MAX_TIMEOUT_SECONDS } from '../lib/execution-mode'
 import { fmtTime } from '../lib/format'
 import {
   emptyTaskForm,
@@ -246,6 +246,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
         <Section title="执行策略">
           <ExecutionModeField
             taskId={id}
+            timeoutSeconds={f.timeoutSeconds}
             value={f.executionMode}
             onChange={(v) => set('executionMode', v)}
             error={errors.executionMode}
@@ -331,11 +332,13 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
 
 function ExecutionModeField({
   taskId,
+  timeoutSeconds,
   value,
   onChange,
   error,
 }: {
   taskId?: string
+  timeoutSeconds: string
   value: TaskFormState['executionMode']
   onChange: (v: TaskFormState['executionMode']) => void
   error?: string
@@ -349,6 +352,10 @@ function ExecutionModeField({
   })
   const queueAvailable = me.data?.queueAvailable ?? true
   const p95 = stats.data?.summary.durationP95 ?? null
+  // An unparseable timeout is reported on its own field; assume the default meanwhile.
+  const timeout = Number(timeoutSeconds)
+  const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout * 1000 : 25_000
+  const workerFits = timeoutMs <= WORKER_MAX_TIMEOUT_SECONDS * 1000
   return (
     <Radio.Group
       legend="执行方式"
@@ -357,7 +364,7 @@ function ExecutionModeField({
       value={value}
       onValueChange={(v) => onChange(v as TaskFormState['executionMode'])}
       error={error}
-      description={!taskId || stats.data ? suggestionText(p95, queueAvailable) : undefined}
+      description={!taskId || stats.data ? suggestionText(p95, timeoutMs, queueAvailable) : undefined}
     >
       <Radio.Item
         label="跟随全局"
@@ -365,12 +372,22 @@ function ExecutionModeField({
         description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（EXECUTION_MODE）` : 'EXECUTION_MODE'}
       />
       <Radio.Item
+        label={MODE_LABEL.worker}
+        value="worker"
+        disabled={!workerFits && value !== 'worker'}
+        description={
+          workerFits
+            ? '交给 Worker 后台执行，等待不计费，通常最便宜'
+            : `需要把超时设在 ${WORKER_MAX_TIMEOUT_SECONDS} 秒以内`
+        }
+      />
+      <Radio.Item
         label={MODE_LABEL.queue}
         value="queue"
         disabled={!queueAvailable && value !== 'queue'}
-        description={queueAvailable ? '经 Queue 投递执行，适合响应慢的接口' : '当前部署没有配置 Queue'}
+        description={queueAvailable ? '经 Queue 投递执行，适合超时较长的慢接口' : '当前部署没有配置 Queue'}
       />
-      <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，不经过 Queue" />
+      <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，等待按时长计费" />
     </Radio.Group>
   )
 }

@@ -56,7 +56,7 @@ export const taskInputSchema = z.object({
     })
     .default({ count: 0, intervalSeconds: 10 }),
   alert: alertSchema.default({ mode: 'inherit' }),
-  executionMode: z.enum(['inherit', 'queue', 'direct']).default('inherit'),
+  executionMode: z.enum(['inherit', 'queue', 'direct', 'worker']).default('inherit'),
 })
 
 export type TaskInput = z.output<typeof taskInputSchema>
@@ -138,6 +138,8 @@ export interface ScheduleSnapshot extends ScheduleSpec {
   /** How long a dispatched run may hold the skip-mode "running" slot. */
   leaseMs: number
   executionMode: TaskExecutionMode
+  /** The configured executor timeout; worker execution caps it at 25 seconds. */
+  timeoutMs: number
 }
 
 export function toSnapshot(task: Task): ScheduleSnapshot {
@@ -151,5 +153,6 @@ export function toSnapshot(task: Task): ScheduleSnapshot {
     overlapPolicy: task.overlapPolicy,
     leaseMs,
     executionMode: task.executionMode,
+    timeoutMs,
   }
 }

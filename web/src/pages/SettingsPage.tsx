@@ -1,7 +1,7 @@
 import { Button, Input, InputArea, LayerCard, Text, useKumoToastManager } from '@cloudflare/kumo'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import type { AlertSettings } from '../../../src/shared/types'
+import type { AlertSettings, ExecutionMode } from '../../../src/shared/types'
 import { api, ApiError, errorMessage } from '../api'
 import { DescriptionList } from '../components/DescriptionList'
 import { PageHeader } from '../components/PageHeader'
@@ -20,6 +20,12 @@ const PLACEHOLDERS = [
 ]
 
 const FEISHU_EXAMPLE = '{"msg_type":"text","content":{"text":"任务 {{task.name}} 失败：{{run.error}}"}}'
+
+const EXECUTION_MODE_TEXT: Record<ExecutionMode, string> = {
+  queue: '队列：经 Queue 投递给 Worker 执行',
+  direct: '直接执行：调度器 DO 自己发起请求',
+  worker: 'Worker 异步：调度器 DO 交给 Worker 后台执行',
+}
 
 export function SettingsPage() {
   const alert = useQuery({ queryKey: ['alert'], queryFn: api.alert })
@@ -54,9 +60,7 @@ export function SettingsPage() {
                   ['统计保留', `${me.data.statsRetentionDays} 天（STATS_RETENTION_DAYS）`],
                   [
                     '执行方式',
-                    me.data.executionMode === 'direct'
-                      ? '直接执行：调度器 DO 自己发起请求（EXECUTION_MODE=direct）'
-                      : '队列：经 Queue 投递给消费者执行（EXECUTION_MODE=queue）',
+                    `${EXECUTION_MODE_TEXT[me.data.executionMode]}（EXECUTION_MODE=${me.data.executionMode}，任务可单独覆盖）`,
                   ],
                 ]}
               />

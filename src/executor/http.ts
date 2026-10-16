@@ -17,7 +17,8 @@ export const httpConfigSchema = z.object({
   method: z.enum(HTTP_METHODS).default('GET'),
   headers: z.record(z.string().trim().min(1), z.string()).default({}),
   body: z.string().max(64 * 1024).default(''),
-  timeoutMs: z.number().int().min(1000).max(300_000).default(30_000),
+  // Default fits worker mode (WORKER_MAX_TIMEOUT_MS).
+  timeoutMs: z.number().int().min(1000).max(300_000).default(25_000),
   successKeyword: z.string().max(200).default(''),
 })
 

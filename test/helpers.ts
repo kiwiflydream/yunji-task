@@ -30,6 +30,7 @@ export function snapshotFor(overrides: Partial<ScheduleSnapshot> = {}): Schedule
     overlapPolicy: 'skip',
     leaseMs: 60_000,
     executionMode: 'inherit',
+    timeoutMs: 30_000,
     ...overrides,
   }
 }

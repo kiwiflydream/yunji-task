@@ -14,7 +14,7 @@ CREATE TABLE tasks (
   retry_interval_seconds INTEGER NOT NULL DEFAULT 10,
   alert_config TEXT NOT NULL DEFAULT '{"mode":"inherit"}',
   -- 'inherit' follows the EXECUTION_MODE variable.
-  execution_mode TEXT NOT NULL DEFAULT 'inherit' CHECK (execution_mode IN ('inherit', 'queue', 'direct')),
+  execution_mode TEXT NOT NULL DEFAULT 'inherit' CHECK (execution_mode IN ('inherit', 'queue', 'direct', 'worker')),
   version INTEGER NOT NULL DEFAULT 1,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL

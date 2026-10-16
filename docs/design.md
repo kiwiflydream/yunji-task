@@ -28,7 +28,7 @@
 | 执行器 | 可插拔注册表，v1 只有 `http`（URL / method / headers / body / 超时 / 成功关键字） |
 | 调度类型 | `cron`（6 段，秒级，带时区，默认 Asia/Shanghai）、`once`（指定时间执行一次，执行后自动停用）、`manual`（只能手动/API 触发） |
 | 调度引擎 | 每任务一个 SQLite 后端的 Durable Object，靠 alarm 实现秒级触发 |
-| 执行路径 | 每个任务可以单独设置（`executionMode`：`inherit` / `queue` / `direct`），`inherit` 跟随全局的 `EXECUTION_MODE`：`queue`（默认），alarm 先 setAlarm(下一次) 再投递消息，消费者执行；`direct`，不用 Queue，由调度器 DO 自己执行。见下文「执行方式」 |
+| 执行路径 | 每个任务可以单独设置（`executionMode`：`inherit` / `queue` / `direct` / `worker`），`inherit` 跟随全局的 `EXECUTION_MODE`（默认 `worker`）。见下文「执行方式」 |
 | 错过的触发 | 不补跑。下一次触发时间总是从 `max(now, 本次计划时间)` 往后算 |
 | 重叠策略 | 每任务配置：`skip`（默认）/ `parallel`。skip 模式下 DO 记录 `running {runId, leaseUntil}`，消费者结束后调用 `complete(runId)` 释放；租约过期视为释放 |
 | 失败处理 | 重试次数 0–10、间隔 1–3600 秒，用 Queue `delaySeconds` 实现；最终失败调用告警 webhook |
@@ -52,22 +52,26 @@
 
 ## 执行方式（`EXECUTION_MODE`）
 
-| | `queue`（默认） | `direct` |
-|---|---|---|
-| 谁执行 HTTP | Queue 消费者（Worker） | 调度器 DO：alarm 先改状态、重新设 alarm，再用 `ctx.waitUntil` 在后台执行，立刻返回，不阻塞下一次触发 |
-| 失败重试 | Queue `delaySeconds` | 存进 DO 存储（每个待执行一个 `pending:<runId>` 键，避免并发执行读改写同一个列表）；alarm 指向「下一次触发」和「最早的待执行」中较早的那个 |
-| skip 槽位释放 | 消费者调用 DO `complete()` | DO 内部直接释放 |
-| 手动触发 | 投递消息 | 调用 DO 的 `execute()` |
-| 每次执行的计费 | Queue 3 次操作、Worker 1 次请求、DO 2 次请求 | DO 1 次请求，加上 **HTTP 等待时长 × 128MB 的 DO duration** |
-| 适合 | 慢接口、高并发 | 免费套餐、对价格敏感、接口响应在 1 秒以内 |
+三种方式下，调度器 DO 的 alarm 都先改状态、重新设 alarm，再把这次执行交出去，不阻塞下一次触发。区别在于谁去发 HTTP 请求：
 
-- **为什么默认用 Queue**：Worker 等待 HTTP 响应不计费，DO 等待要按墙钟时间计 duration。接口平均响应超过约 1 秒时，Queue 模式更便宜（Paid 套餐下 Queue 路径每百万次约 $1.5，DO 每秒约 $1.56 每百万次）。
-- **免费套餐**：Queue 每天 1 万次操作只够约 3300 次执行；direct 模式下瓶颈变成 D1 写入，约 1.6 万次每天。
-- **direct 模式的代价**：部署或运行时更新时，正在执行的请求最多有 30 秒宽限。被中断的 run 由丢失扫描标记为 failed，和 Queue 模式下消费者崩溃的结果一样。一个任务的所有执行都落在它自己那个 DO 上。DO 等待待处理 I/O 最多 15 分钟，超时上限 300 秒，在范围内。
-- **按任务设置**：任务的 `executionMode` 默认是 `inherit`（跟随 `EXECUTION_MODE`），也可以单独指定 `queue` 或 `direct`。这个字段在调度快照里，修改后版本号加 1 并同步到 DO。重试和槽位释放跟着这次执行实际走的路径，两种模式可以在同一个部署里同时存在。
-- **没有 Queue 的部署**：保存任务时如果选了 `queue` 会返回 422。如果运行时某个任务最终落到 `queue`（例如全局是 `queue` 但删掉了 queues 配置），就回退到 `direct` 并记录警告，任务不会悄悄停掉。
-- **表单建议**：编辑任务时，根据这个任务近 7 天的 P95 耗时给出建议：低于 1 秒建议直接执行，否则建议队列。只给建议，不自动切换，因为自动切换会在没人操作的情况下改变计费方式。
-- 切换模式只改配置，不迁移数据。从 queue 切到 direct 时，Queue 里已经投递的消息需要旧的消费者跑完再删除队列。
+| | `queue` | `direct` | `worker`（默认） |
+|---|---|---|---|
+| 谁执行 HTTP | Queue 消费者（Worker） | 调度器 DO 自己，在 `ctx.waitUntil` 里 | `RunExecutor` 入口（同一个 Worker）：DO 通过 `ctx.exports.RunExecutor.start()` 调用，它把执行放进自己的 `waitUntil` 后立刻返回 |
+| 失败重试 | Queue `delaySeconds` | 存进 DO：每个待执行一个 `pending:<runId>` 键（避免并发执行读改写同一个列表），alarm 指向「下一次触发」和「最早的待执行」中较早的那个 | 同 `direct`，由 Worker 回调 DO 的 `schedule()` 登记，到点后 DO 再交给 Worker |
+| D1 等基础设施出错 | Queue 自动重投 | 30 秒后重新投递，最多 3 次 | 同 `direct`（交给 Worker 失败时也一样） |
+| skip 槽位释放 | 消费者调用 DO `complete()` | DO 内部直接释放 | Worker 调用 DO `complete()` |
+| 手动触发 | 投递消息 | 调用 DO 的 `execute()` | 同 `direct` |
+| 每次执行的计费 | Queue 3 次操作、Worker 1 次请求、DO 2 次请求 | DO 1 次请求，加上 **HTTP 等待时长 × 128MB 的 DO duration** | Worker 1 次请求、DO 2 次请求；等待时间落在 Worker 上，只按 CPU 计费 |
+| 限制 | 无 | DO 等待待处理 I/O 最多 15 分钟，超时上限 300 秒，在范围内 | **超时 ≤ 25 秒**：`waitUntil` 在入口返回后最多再跑 30 秒，留 5 秒给抢占、记录结果和回调 |
+
+- **为什么 DO 等待要收费**：DO 按在内存中的墙钟时间计费，有未完成的出站请求时不能休眠；普通 Worker 只按 CPU 计费，等待 I/O 不收费。`worker` 方式让 DO 只做一次几毫秒的 RPC，等待落在 Worker 上。
+- **计费的两个未验证点**：DO 经 `ctx.exports` 调用 Worker 是否算一次 Worker 请求（按最坏情况算了）；`waitUntil` 里的等待是否确实只计 CPU（Workers 的计费规则如此，但文档没有针对 `waitUntil` 单独说明）。部署后在 Cloudflare 后台核对用量。
+- **执行方式与超时**：执行方式只由任务覆盖和 `EXECUTION_MODE` 决定，超时不参与路径选择。新任务的默认超时是 25 秒。保存时显式选 `worker`，或跟随当前全局 `worker`，超时超过 25 秒均返回 422。如果已有长超时任务因后续全局变更而使用 `worker`，仍交给 Worker，每次请求超时取任务设置与 25 秒的较小值；不修改存储配置，重试也遵守上限。`direct` / `queue` 使用任务原始超时。
+- **部署时**：`direct` 和 `worker` 的请求都在 `waitUntil` 里，部署或运行时更新时可能被中断；被中断的 run 由丢失扫描标记为 failed，和 Queue 消费者崩溃的结果一样。
+- **按任务设置**：任务的 `executionMode` 默认是 `inherit`，也可以单独指定。这个字段和超时都在调度快照里，修改后版本号加 1 并同步到 DO。重试和槽位释放跟着这次执行实际走的路径，几种方式可以在同一个部署里同时存在。
+- **没有 Queue 的部署**：保存任务时显式选 `queue`，或跟随当前全局 `queue`，均返回 422。已有任务运行时选中了 `queue` 而绑定已被移除，则明确报错，不自动改走其他执行方式。
+- **表单建议**：超时在 25 秒以内建议 `worker`；否则根据近 7 天的 P95 耗时，低于 1 秒建议 `direct`，更慢建议 `queue`，并提示 Free 套餐优先 `direct`。只给建议，不自动切换，因为自动切换会在没人操作的情况下改变计费方式。各种方式在不同套餐下的选法见 README「选择执行方式」。
+- 切换方式只改配置，不迁移数据。不再用 `queue` 时，Queue 里已经投递的消息需要旧的消费者跑完再删除队列。
 
 ## 数据模型（D1）
 
@@ -122,6 +126,6 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 | `ADMIN_USERNAME` | var | basic 模式用户名，默认 `admin` |
 | `ACCESS_TEAM_DOMAIN` | var | access 模式：例如 `myteam.cloudflareaccess.com` |
 | `ACCESS_AUD` | var | access 模式：Access 应用的 AUD tag |
-| `EXECUTION_MODE` | var | 全局默认的执行方式：`queue`（默认）或 `direct`，任务可以单独覆盖，见「执行方式」；未知值按 `queue` 处理并记录警告 |
+| `EXECUTION_MODE` | var | 全局默认的执行方式：`worker`（默认）、`queue` 或 `direct`，任务可以单独覆盖，见「执行方式」；未知值按 `worker` 处理并记录警告 |
 | `RUN_RETENTION_DAYS` | var | 执行日志保留天数，1–3650，默认 30；非法值按默认处理并记录警告 |
 | `STATS_RETENTION_DAYS` | var | 统计保留天数，1–3650，默认 90；非法值按默认处理并记录警告 |

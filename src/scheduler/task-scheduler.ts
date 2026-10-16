@@ -4,9 +4,10 @@ import { disableFiredOnceTask } from '../domain/tasks-repo'
 import { insertSkippedRun, type RunMessage } from '../domain/runs-repo'
 import { processRun, type RunTransport } from '../executor/consumer'
 import { effectiveMode, runQueue } from '../executor/mode'
+import { MAX_DELIVERIES, REDELIVERY_DELAY_MS } from '../executor/run-executor'
 import { nextFireTime } from '../lib/schedule'
 
-import type { RunningSlot, SchedulerStatus } from '../shared/types'
+import type { ExecutionMode, RunningSlot, SchedulerStatus } from '../shared/types'
 
 export type { SchedulerStatus }
 
@@ -15,24 +16,28 @@ const K_NEXT = 'nextRunAt'
 const K_RUNNING = 'running'
 /** Version of a once task that already fired; it must never be re-armed. */
 const K_ONCE_FIRED = 'onceFiredVersion'
-/** Direct mode: one key per pending attempt, so concurrent runs never read-modify-write a shared list. */
+/** Direct / worker mode: one key per pending attempt, so concurrent runs never read-modify-write a shared list. */
 const PENDING_PREFIX = 'pending:'
 
-/** Direct mode: an attempt waiting for its time (a retry, or a redelivery after an infrastructure error). */
-interface PendingRun {
+/** Modes in which the DO hands out runs itself (rather than the queue). */
+export type LocalMode = Exclude<ExecutionMode, 'queue'>
+
+/** An attempt waiting for its time (a retry, or a redelivery after an infrastructure error). */
+export interface PendingRun {
   msg: RunMessage
   dueAt: number
   /** Failed deliveries so far; mirrors the queue's max_retries for infrastructure errors. */
   deliveries: number
+  /** Where it runs when due: inside this DO, or handed to the RunExecutor Worker. */
+  mode: LocalMode
 }
-const MAX_DELIVERIES = 3
-const REDELIVERY_DELAY_MS = 30_000
 
 /**
- * One instance per task (name = taskId). Owns the task's alarm. In queue mode
- * it only dispatches RunMessages to the queue; in direct mode it also executes
- * them (the task's executionMode, else EXECUTION_MODE) and keeps their pending retries, sharing the one
- * alarm between the next fire and the earliest pending attempt.
+ * One instance per task (name = taskId). Owns the task's alarm. Depending on
+ * the task's effective execution mode it sends runs to the queue, executes them
+ * itself (direct) or hands them to the RunExecutor Worker (worker). In the last
+ * two it also keeps their pending retries, sharing the one alarm between the
+ * next fire and the earliest pending attempt.
  */
 export class TaskScheduler extends DurableObject<CloudflareBindings> {
   /** Apply a snapshot from D1. Idempotent; stale versions are ignored. */
@@ -113,9 +118,15 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     if (running?.runId === runId) await this.ctx.storage.delete(K_RUNNING)
   }
 
-  /** Direct mode: start a run (e.g. a manual trigger) without waiting for it. */
-  async execute(msg: RunMessage): Promise<void> {
-    this.start({ msg, dueAt: Date.now(), deliveries: 0 })
+  /** Direct / worker mode: start a run (e.g. a manual trigger) without waiting for it. */
+  async execute(msg: RunMessage, mode: LocalMode): Promise<void> {
+    this.start({ msg, dueAt: Date.now(), deliveries: 0, mode })
+  }
+
+  /** Keep an attempt until it is due (retries, redeliveries); also called by the RunExecutor Worker. */
+  async schedule(p: PendingRun): Promise<void> {
+    await this.ctx.storage.put(PENDING_PREFIX + p.msg.runId, p)
+    await this.rearm()
   }
 
   async status(): Promise<SchedulerStatus> {
@@ -174,8 +185,9 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       }
       // Take the slot before handing the run off so a fast finish cannot race ahead of it.
       if (skip) await storage.put(K_RUNNING, { runId: msg.runId, leaseUntil: now + snapshot.leaseMs })
-      if (effectiveMode(this.env, snapshot.executionMode) === 'direct') {
-        this.start({ msg, dueAt: now, deliveries: 0 })
+      const mode = effectiveMode(this.env, snapshot)
+      if (mode !== 'queue') {
+        this.start({ msg, dueAt: now, deliveries: 0, mode })
         return
       }
       try {
@@ -189,37 +201,50 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     }
   }
 
-  /** Direct mode: run an attempt in the background; the pending I/O keeps the object alive. */
+  /**
+   * Run an attempt in the background: here (the pending I/O keeps the object
+   * alive), or by handing it to the RunExecutor Worker, which answers at once.
+   */
   private start(p: PendingRun): void {
-    this.ctx.waitUntil(this.runDirect(p))
+    this.ctx.waitUntil(p.mode === 'worker' ? this.handOff(p) : this.runDirect(p))
+  }
+
+  private async handOff(p: PendingRun): Promise<void> {
+    try {
+      await this.ctx.exports.RunExecutor.start(p.msg, p.deliveries)
+    } catch (err) {
+      await this.redeliver(p, err)
+    }
   }
 
   private async runDirect(p: PendingRun): Promise<void> {
     try {
       await processRun(p.msg, this.env, this.directTransport())
     } catch (err) {
-      // Infrastructure error (D1). Like a queue redelivery: if the attempt was
-      // already claimed, the redelivery is a no-op and the lost-run sweep closes it.
-      console.error('direct run failed', p.msg.runId, err)
-      if (p.deliveries + 1 < MAX_DELIVERIES) {
-        await this.schedule({ msg: p.msg, dueAt: Date.now() + REDELIVERY_DELAY_MS, deliveries: p.deliveries + 1 })
-      }
+      await this.redeliver(p, err)
+    }
+  }
+
+  /**
+   * Infrastructure error (D1, or the hand-off). Like a queue redelivery: if the
+   * attempt was already claimed, the redelivery is a no-op and the lost-run sweep closes it.
+   */
+  private async redeliver(p: PendingRun, err: unknown): Promise<void> {
+    console.error(`${p.mode} run failed`, p.msg.runId, err)
+    if (p.deliveries + 1 < MAX_DELIVERIES) {
+      await this.schedule({ ...p, dueAt: Date.now() + REDELIVERY_DELAY_MS, deliveries: p.deliveries + 1 })
     }
   }
 
   private directTransport(): RunTransport {
     return {
-      retry: (next, delaySeconds) => this.schedule({ msg: next, dueAt: Date.now() + delaySeconds * 1000, deliveries: 0 }),
+      retry: (next, delaySeconds) =>
+        this.schedule({ msg: next, dueAt: Date.now() + delaySeconds * 1000, deliveries: 0, mode: 'direct' }),
       finished: async (msg) => {
         if (msg.trigger === 'schedule') await this.complete(msg.runId)
       },
       orphaned: () => this.destroy(),
     }
-  }
-
-  private async schedule(p: PendingRun): Promise<void> {
-    await this.ctx.storage.put(PENDING_PREFIX + p.msg.runId, p)
-    await this.rearm()
   }
 
   private async disableFiredOnce(snapshot: ScheduleSnapshot): Promise<void> {

@@ -3,6 +3,7 @@ import type { RunMessage } from './domain/runs-repo'
 import { handleRunBatch } from './executor/consumer'
 import { runMaintenance } from './maintenance/maintenance'
 
+export { RunExecutor } from './executor/run-executor'
 export { TaskScheduler } from './scheduler/task-scheduler'
 
 export default {

@@ -47,7 +47,7 @@ describe('tasks API', () => {
       overlapPolicy: 'skip',
       retry: { count: 0, intervalSeconds: 10 },
       alert: { mode: 'inherit' },
-      executor: { type: 'http', config: { method: 'GET', timeoutMs: 30_000, headers: {}, body: '' } },
+      executor: { type: 'http', config: { method: 'GET', timeoutMs: 25_000, headers: {}, body: '' } },
     })
     expect(task.nextRunAt % 300_000).toBe(0)
     const status = await env.TASK_SCHEDULER.getByName(task.id).status()

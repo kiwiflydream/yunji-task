@@ -48,7 +48,7 @@ export const emptyTaskForm: TaskFormState = {
   url: '',
   headers: [],
   body: '',
-  timeoutSeconds: '30',
+  timeoutSeconds: '25',
   successKeyword: '',
   overlapPolicy: 'skip',
   retryCount: '0',

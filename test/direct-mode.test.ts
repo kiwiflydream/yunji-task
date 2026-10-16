@@ -185,12 +185,13 @@ describe('direct mode', () => {
 })
 
 describe('executionMode', () => {
-  it('defaults to queue and ignores unknown values', () => {
+  it('defaults to worker and ignores unknown values', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    expect(executionMode({})).toBe('queue')
+    expect(executionMode({})).toBe('worker')
     expect(executionMode({ EXECUTION_MODE: ' direct ' })).toBe('direct')
     expect(executionMode({ EXECUTION_MODE: 'queue' })).toBe('queue')
-    expect(executionMode({ EXECUTION_MODE: 'inline' })).toBe('queue')
+    expect(executionMode({ EXECUTION_MODE: 'worker' })).toBe('worker')
+    expect(executionMode({ EXECUTION_MODE: 'inline' })).toBe('worker')
     expect(warn).toHaveBeenCalledTimes(1)
   })
 

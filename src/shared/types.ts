@@ -50,7 +50,12 @@ export interface Issue {
 }
 
 export type AdminAuthMode = 'basic' | 'access'
-export type ExecutionMode = 'queue' | 'direct'
+export type ExecutionMode = 'queue' | 'direct' | 'worker'
+/**
+ * Worker mode runs in `waitUntil`, which may continue for 30 s after the
+ * entrypoint returns; this leaves headroom for claiming, recording and reporting back.
+ */
+export const WORKER_MAX_TIMEOUT_MS = 25_000
 /** A task's own setting; `inherit` follows EXECUTION_MODE. */
 export type TaskExecutionMode = 'inherit' | ExecutionMode
 

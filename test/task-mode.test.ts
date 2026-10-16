@@ -75,6 +75,12 @@ describe('per-task execution mode: API', () => {
     const bad = await call('/tasks', { method: 'POST', body: JSON.stringify({ ...taskBody(), executionMode: 'inline' }) })
     expect(bad.status).toBe(422)
   })
+
+  it('rejects inheriting an unavailable global queue', async () => {
+    const res = await call('/tasks', { method: 'POST', body: JSON.stringify(taskBody()) }, withoutQueue())
+    expect(res.status).toBe(422)
+    expect(((await res.json()) as { issues: { path: string }[] }).issues).toMatchObject([{ path: 'executionMode' }])
+  })
 })
 
 describe('per-task execution mode: dispatch', () => {
@@ -109,17 +115,20 @@ describe('per-task execution mode: dispatch', () => {
     expect(sent).toHaveLength(1)
   })
 
-  it('a queue task without the binding falls back to direct instead of stopping', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('ok'))
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  it('a queue task without the binding reports the failure without executing directly', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
     const task = await createTaskRow({ executionMode: 'queue' })
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
     await schedulerEnv(stub, { RUN_QUEUE: undefined })
 
     await runDurableObjectAlarm(stub)
-    await ranDirectly(task.id)
-    expect(warn.mock.calls.some(([m]) => String(m).includes('RUN_QUEUE binding is not configured'))).toBe(true)
+    expect(await listRuns(env.DB, task.id, { limit: 5 })).toEqual([])
+    expect(fetch).not.toHaveBeenCalled()
+    expect((await stub.status()).running).toBeNull()
+    expect(error.mock.calls.some((args) => args.some((v) => String(v).includes('RUN_QUEUE binding is not configured')))).toBe(true)
+    expect(effectiveMode(withoutQueue(), { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
   })
 
   it('manual triggers follow the task mode', async () => {
@@ -135,10 +144,10 @@ describe('per-task execution mode: dispatch', () => {
   it('effectiveMode: task setting first, then EXECUTION_MODE', () => {
     const queueEnv = Object.create(env, { EXECUTION_MODE: { value: 'queue' } }) as CloudflareBindings
     const directEnv = Object.create(env, { EXECUTION_MODE: { value: 'direct' } }) as CloudflareBindings
-    expect(effectiveMode(queueEnv, 'inherit')).toBe('queue')
-    expect(effectiveMode(queueEnv, 'direct')).toBe('direct')
-    expect(effectiveMode(directEnv, 'inherit')).toBe('direct')
-    expect(effectiveMode(directEnv, 'queue')).toBe('queue')
+    expect(effectiveMode(queueEnv, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('queue')
+    expect(effectiveMode(queueEnv, { executionMode: 'direct', timeoutMs: 30_000 })).toBe('direct')
+    expect(effectiveMode(directEnv, { executionMode: 'inherit', timeoutMs: 30_000 })).toBe('direct')
+    expect(effectiveMode(directEnv, { executionMode: 'queue', timeoutMs: 30_000 })).toBe('queue')
   })
 })
 
@@ -146,22 +155,49 @@ describe('per-task execution mode: UI helpers', () => {
   const queueGlobal = { executionMode: 'queue' as const, queueAvailable: true }
   const directNoQueue = { executionMode: 'direct' as const, queueAvailable: false }
 
+  const LONG = 30_000
+  const SHORT = 10_000
+
   it('describes the mode a task actually uses', () => {
-    expect(describeTaskMode('inherit', queueGlobal)).toBe('队列（跟随全局）')
-    expect(describeTaskMode('direct', queueGlobal)).toBe('直接执行')
-    expect(describeTaskMode('inherit', directNoQueue)).toBe('直接执行（跟随全局）')
-    expect(describeTaskMode('queue', directNoQueue)).toBe('直接执行（未配置 Queue，已回退）')
-    expect(effectiveTaskMode('queue', directNoQueue)).toEqual({ mode: 'direct', fallback: true })
+    expect(describeTaskMode('inherit', LONG, queueGlobal)).toBe('队列（跟随全局）')
+    expect(describeTaskMode('direct', LONG, queueGlobal)).toBe('直接执行')
+    expect(describeTaskMode('worker', SHORT, queueGlobal)).toBe('Worker 异步')
+    expect(describeTaskMode('inherit', LONG, directNoQueue)).toBe('直接执行（跟随全局）')
+    expect(describeTaskMode('queue', LONG, directNoQueue)).toBe('队列（未配置 Queue，无法执行）')
+    expect(effectiveTaskMode('queue', LONG, directNoQueue)).toEqual({ mode: 'queue', timeoutMs: LONG, unavailable: true })
+    const workerGlobal = { executionMode: 'worker' as const, queueAvailable: true }
+    expect(describeTaskMode('inherit', SHORT, workerGlobal)).toBe('Worker 异步（跟随全局）')
+    expect(describeTaskMode('inherit', LONG, workerGlobal)).toBe('Worker 异步（跟随全局，执行超时上限 25 秒）')
+    expect(describeTaskMode('worker', LONG, workerGlobal)).toBe('Worker 异步（执行超时上限 25 秒）')
+    expect(effectiveTaskMode('inherit', LONG, { ...workerGlobal, queueAvailable: false })).toEqual({
+      mode: 'worker',
+      timeoutMs: 25_000,
+      unavailable: false,
+    })
   })
 
-  it('suggests direct below one second of P95 and queue above', () => {
-    expect(suggestMode(null)).toBeNull()
-    expect(suggestMode(999)).toBe('direct')
-    expect(suggestMode(1000)).toBe('queue')
-    expect(suggestionText(120, true)).toBe('近 7 天 P95 耗时 120ms，建议「直接执行」：低于 1 秒时比队列便宜。')
-    expect(suggestionText(2300, false)).toContain('建议「队列」')
-    expect(suggestionText(2300, false)).toContain('当前部署没有配置 Queue')
-    expect(suggestionText(null, true)).toContain('还没有耗时数据')
+  it('suggests worker when the timeout fits, else direct below one second of P95 and queue above', () => {
+    expect(suggestMode(null, SHORT)).toBe('worker')
+    expect(suggestMode(3420, 25_000)).toBe('worker')
+    expect(suggestMode(null, 25_001)).toBeNull()
+    expect(suggestMode(999, LONG)).toBe('direct')
+    expect(suggestMode(1000, LONG)).toBe('queue')
+    expect(suggestionText(3420, SHORT, true)).toBe(
+      '这个接口一般 3.42s 返回（近 7 天 P95）。超时在 25 秒以内，建议「Worker 异步」：等待由普通 Worker 承担、' +
+        '不按时长计费，每百万次约 $0.45，Paid 和 Free 套餐下都最便宜。执行量在免费额度内时都不花钱。',
+    )
+    expect(suggestionText(null, SHORT, true)).toMatch(/^超时在 25 秒以内，建议「Worker 异步」/)
+    expect(suggestionText(3420, LONG, true)).toBe(
+      '超时超过 25 秒，不能用「Worker 异步」。这个接口一般 3.42s 返回（近 7 天 P95）。' +
+        '直接执行时这段等待按 DO 运行时长计费，每百万次约 $5.3；走队列每百万次约 $1.5，所以 Paid 套餐建议「队列」。' +
+        '执行量在免费额度内时都不花钱。Free 套餐优先选「直接执行」：Queue 的免费额度每天只够约 3300 次执行。',
+    )
+    expect(suggestionText(40, LONG, true)).toContain('每百万次不到 $0.1')
+    expect(suggestionText(120, LONG, true)).toContain('Paid 套餐建议「直接执行」。')
+    expect(suggestionText(120, LONG, true)).not.toContain('Free 套餐')
+    expect(suggestionText(2300, LONG, false)).toContain('建议「队列」（但当前部署没有配置 Queue）')
+    expect(suggestionText(null, LONG, true)).toContain('还没有耗时数据')
+    expect(suggestionText(null, LONG, true)).toContain('Free 套餐优先选「直接执行」')
   })
 
   it('the form sends the mode and maps its server error back to the field', () => {

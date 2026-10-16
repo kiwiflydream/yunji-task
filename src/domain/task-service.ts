@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
 import * as repo from './tasks-repo'
-import { effectiveMode, hasRunQueue, runQueue } from '../executor/mode'
+import { effectiveMode, executionMode, hasRunQueue, runQueue, WORKER_MAX_TIMEOUT_MS } from '../executor/mode'
 import { nextFireTime } from '../lib/schedule'
 
 import type { Issue } from '../shared/types'
@@ -24,7 +24,17 @@ export function parseTaskInput(raw: unknown, now: number, env?: CloudflareBindin
   const parsed = taskInputSchema.safeParse(raw)
   if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
   assertRunnable(parsed.data, now)
-  if (env && parsed.data.executionMode === 'queue' && !hasRunQueue(env)) {
+  const timeoutMs = parsed.data.executor.config.timeoutMs
+  const mode = parsed.data.executionMode === 'inherit' && env ? executionMode(env) : parsed.data.executionMode
+  if (mode === 'worker' && timeoutMs > WORKER_MAX_TIMEOUT_MS) {
+    throw new ValidationError([
+      {
+        path: 'executionMode',
+        message: `Worker 异步只支持 ${WORKER_MAX_TIMEOUT_MS / 1000} 秒以内的超时（当前 ${timeoutMs / 1000} 秒）`,
+      },
+    ])
+  }
+  if (env && mode === 'queue' && !hasRunQueue(env)) {
     throw new ValidationError([
       { path: 'executionMode', message: '当前部署没有配置 Queue（wrangler.jsonc 的 queues），不能选择队列执行' },
     ])
@@ -97,7 +107,8 @@ export async function triggerTask(env: CloudflareBindings, id: string): Promise<
   if (!task) return null
   const now = Date.now()
   const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
-  if (effectiveMode(env, task.executionMode) === 'direct') await env.TASK_SCHEDULER.getByName(id).execute(msg)
-  else await runQueue(env).send(msg)
+  const mode = effectiveMode(env, { executionMode: task.executionMode, timeoutMs: task.executor.config.timeoutMs })
+  if (mode === 'queue') await runQueue(env).send(msg)
+  else await env.TASK_SCHEDULER.getByName(id).execute(msg, mode)
   return msg.runId
 }

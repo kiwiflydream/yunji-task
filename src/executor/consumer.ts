@@ -50,6 +50,7 @@ export async function processRun(
   msg: RunMessage,
   env: CloudflareBindings,
   transport: RunTransport = queueTransport(env),
+  maxTimeoutMs?: number,
 ): Promise<void> {
   const task = await getTask(env.DB, msg.taskId)
   if (!task) {
@@ -64,7 +65,10 @@ export async function processRun(
   try {
     const names = referencedVariables(...executor.templatedFields(task.executor.config))
     variables = await resolveVariables(env.DB, env.ENCRYPTION_KEY, names)
-    result = await executor.execute(task.executor.config, variables)
+    const config = maxTimeoutMs === undefined
+      ? task.executor.config
+      : { ...task.executor.config, timeoutMs: Math.min(task.executor.config.timeoutMs, maxTimeoutMs) }
+    result = await executor.execute(config, variables)
   } catch (err) {
     result = {
       ok: false,

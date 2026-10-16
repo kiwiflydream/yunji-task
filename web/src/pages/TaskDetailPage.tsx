@@ -94,7 +94,7 @@ function ScheduleCard({ task }: { task: TaskView }) {
     '失败重试',
     task.retry.count === 0 ? '不重试' : `${task.retry.count} 次，间隔 ${task.retry.intervalSeconds} 秒`,
   ])
-  if (me.data) items.push(['执行方式', describeTaskMode(task.executionMode, me.data)])
+  if (me.data) items.push(['执行方式', describeTaskMode(task.executionMode, task.executor.config.timeoutMs, me.data)])
   items.push([
     '失败告警',
     task.alert.mode === 'inherit' ? '使用全局设置' : task.alert.mode === 'off' ? '关闭' : task.alert.url,
