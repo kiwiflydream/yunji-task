@@ -1,0 +1,73 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cf-task",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-16",
+  "observability": {
+    "enabled": true
+  },
+  // The admin SPA (built by Vite into dist/client). Routes the Worker owns run
+  // first, so /admin only serves the HTML shell after admin auth; everything
+  // else (hashed bundles, Vite dev modules) is served as static assets.
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/", "/health", "/api/*", "/admin", "/admin/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cf-task",
+      // Replace with the id printed by `wrangler d1 create cf-task` before deploying.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "TASK_SCHEDULER",
+        "class_name": "TaskScheduler"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["TaskScheduler"]
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "RUN_QUEUE",
+        "queue": "cf-task-runs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "cf-task-runs",
+        // One message per batch: a full batch is delivered immediately, so
+        // second-level tasks never wait on max_batch_timeout.
+        "max_batch_size": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "cf-task-runs-dlq"
+      }
+    ]
+  },
+  "triggers": {
+    // Reconcile D1 -> DO, mark lost runs, purge old logs.
+    "crons": ["*/5 * * * *"]
+  },
+  "vars": {
+    // Admin UI auth: "basic" (ADMIN_USERNAME + ADMIN_PASSWORD secret) or "access" (Cloudflare Access).
+    "ADMIN_AUTH_MODE": "basic",
+    "ADMIN_USERNAME": "admin",
+    // Days of run logs to keep (1-3650); purged by the 5-minute cron.
+    "RUN_RETENTION_DAYS": "30",
+    "STATS_RETENTION_DAYS": "90",
+    // Only used when ADMIN_AUTH_MODE is "access".
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  }
+}

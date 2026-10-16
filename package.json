@@ -1,0 +1,40 @@
+{
+  "name": "cf-task",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "deploy": "vite build && wrangler deploy",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings --strict-vars=false",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p test",
+    "test": "vitest run",
+    "db:migrate:local": "wrangler d1 migrations apply cf-task --local",
+    "db:migrate:remote": "wrangler d1 migrations apply cf-task --remote",
+    "build": "vite build",
+    "preview": "vite build && vite preview"
+  },
+  "dependencies": {
+    "@cloudflare/kumo": "^2.14.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "@tanstack/react-query": "^5.104.3",
+    "croner": "^10.0.1",
+    "echarts": "^6.1.0",
+    "hono": "^4.13.13",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "wouter": "^3.13.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.64.0",
+    "@cloudflare/vitest-plugin": "^1.4.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.5",
+    "wrangler": "^4.110.0"
+  }
+}

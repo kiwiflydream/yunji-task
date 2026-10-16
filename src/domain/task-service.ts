@@ -1,0 +1,96 @@
+import { z } from 'zod'
+import type { RunMessage } from './runs-repo'
+import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
+import * as repo from './tasks-repo'
+import { nextFireTime } from '../lib/schedule'
+
+import type { Issue } from '../shared/types'
+
+export type { Issue }
+
+export class ValidationError extends Error {
+  constructor(readonly issues: Issue[]) {
+    super(issues.map((i) => `${i.path || '(root)'}: ${i.message}`).join('; '))
+  }
+}
+
+export function zodIssues(error: z.ZodError): Issue[] {
+  return error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }))
+}
+
+/** Validate raw input (JSON or form-derived) into a TaskInput. */
+export function parseTaskInput(raw: unknown, now: number): TaskInput {
+  const parsed = taskInputSchema.safeParse(raw)
+  if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
+  assertRunnable(parsed.data, now)
+  return parsed.data
+}
+
+function assertRunnable(task: Pick<TaskInput, 'enabled' | 'schedule'>, now: number) {
+  if (task.enabled && task.schedule.type === 'once' && task.schedule.runAt <= now) {
+    throw new ValidationError([{ path: 'schedule.runAt', message: '执行时间必须晚于当前时间' }])
+  }
+}
+
+/** Next planned fire time, for display. Computed, not stored. */
+export function nextRunAt(task: Task, now: number): number | null {
+  if (!task.enabled) return null
+  return nextFireTime(scheduleSpec(task), now)
+}
+
+/** Push the D1 state to the task's DO. Failures are healed by the reconcile cron. */
+export async function syncScheduler(env: CloudflareBindings, task: Task): Promise<boolean> {
+  try {
+    await env.TASK_SCHEDULER.getByName(task.id).sync(toSnapshot(task))
+    return true
+  } catch (err) {
+    console.error('scheduler sync failed; reconcile will retry', task.id, err)
+    return false
+  }
+}
+
+export async function createTask(env: CloudflareBindings, raw: unknown): Promise<Task> {
+  const now = Date.now()
+  const task = await repo.insertTask(env.DB, parseTaskInput(raw, now), now)
+  await syncScheduler(env, task)
+  return task
+}
+
+export async function updateTask(env: CloudflareBindings, id: string, raw: unknown): Promise<Task | null> {
+  const now = Date.now()
+  const task = await repo.updateTask(env.DB, id, parseTaskInput(raw, now), now)
+  if (task) await syncScheduler(env, task)
+  return task
+}
+
+export async function setTaskEnabled(env: CloudflareBindings, id: string, enabled: boolean): Promise<Task | null> {
+  const now = Date.now()
+  const existing = await repo.getTask(env.DB, id)
+  if (!existing) return null
+  assertRunnable({ enabled, schedule: existing.schedule }, now)
+  const task = await repo.setTaskEnabled(env.DB, id, enabled, now)
+  if (task) await syncScheduler(env, task)
+  return task
+}
+
+export async function deleteTask(env: CloudflareBindings, id: string): Promise<boolean> {
+  const deleted = await repo.deleteTask(env.DB, id)
+  if (!deleted) return false
+  try {
+    await env.TASK_SCHEDULER.getByName(id).destroy()
+  } catch (err) {
+    // The next scheduled message for this task destroys the orphan DO.
+    console.error('failed to destroy scheduler', id, err)
+  }
+  return true
+}
+
+/** Manual trigger: enqueue directly, without touching the DO's schedule. */
+export async function triggerTask(env: CloudflareBindings, id: string): Promise<string | null> {
+  const task = await repo.getTask(env.DB, id)
+  if (!task) return null
+  const now = Date.now()
+  const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
+  await env.RUN_QUEUE.send(msg)
+  return msg.runId
+}
