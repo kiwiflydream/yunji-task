@@ -2,10 +2,13 @@ import { claimRun, recordAttempt, type RunMessage } from '../domain/runs-repo'
 import { getTask } from '../domain/tasks-repo'
 import { resolveVariables } from '../domain/variables'
 import { redact, referencedVariables } from '../lib/template'
-import { sendFailureAlert } from './alert'
+import { deliverAction, recoverRunActions } from './actions'
+import type { RunAction } from '../domain/actions-repo'
+import type { ExecutionMode } from '../shared/types'
 import { runQueue } from './mode'
 import { getExecutor } from './registry'
 import type { ExecutionResult } from './types'
+import { resolveAlertTarget } from './alert'
 
 export async function handleRunBatch(batch: MessageBatch<RunMessage>, env: CloudflareBindings): Promise<void> {
   await Promise.all(
@@ -27,6 +30,7 @@ export async function handleRunBatch(batch: MessageBatch<RunMessage>, env: Cloud
  * that DO and handles all three locally.
  */
 export interface RunTransport {
+  mode: ExecutionMode
   /** Schedule `next` (the following attempt) to run after `delaySeconds`. */
   retry(next: RunMessage, delaySeconds: number): Promise<void>
   /** The run reached a final outcome: free the skip-mode slot. Best effort. */
@@ -37,6 +41,7 @@ export interface RunTransport {
 
 export function queueTransport(env: CloudflareBindings): RunTransport {
   return {
+    mode: 'queue',
     retry: async (next, delaySeconds) => {
       await runQueue(env).send(next, { delaySeconds })
     },
@@ -57,7 +62,13 @@ export async function processRun(
     await transport.orphaned(msg)
     return
   }
-  if (!(await claimRun(env.DB, msg, Date.now()))) return // duplicate delivery
+  const config = maxTimeoutMs === undefined
+    ? task.executor.config
+    : { ...task.executor.config, timeoutMs: Math.min(task.executor.config.timeoutMs, maxTimeoutMs) }
+  if (!(await claimRun(env.DB, msg, Date.now(), { executionMode: transport.mode, effectiveTimeoutMs: config.timeoutMs }))) {
+    await recoverRunActions(env, msg.runId, transport)
+    return
+  }
 
   const executor = getExecutor(task.executor.type)
   let variables: Record<string, string> = {}
@@ -65,9 +76,6 @@ export async function processRun(
   try {
     const names = referencedVariables(...executor.templatedFields(task.executor.config))
     variables = await resolveVariables(env.DB, env.ENCRYPTION_KEY, names)
-    const config = maxTimeoutMs === undefined
-      ? task.executor.config
-      : { ...task.executor.config, timeoutMs: Math.min(task.executor.config.timeoutMs, maxTimeoutMs) }
     result = await executor.execute(config, variables)
   } catch (err) {
     result = {
@@ -92,23 +100,29 @@ export async function processRun(
     return
   }
   if (msg.attempt <= task.retry.count) {
-    if (await recordAttempt(env.DB, msg.runId, 'retrying', result, now)) {
-      await transport.retry({ ...msg, attempt: msg.attempt + 1 }, task.retry.intervalSeconds)
+    const action: RunAction = {
+      id: `${msg.runId}:retry:${msg.attempt + 1}`, taskId: task.id, runId: msg.runId, dueAt: now, attempts: 0,
+      payload: { kind: 'retry', msg: { ...msg, attempt: msg.attempt + 1 }, mode: transport.mode,
+        runAt: now + task.retry.intervalSeconds * 1000 },
+    }
+    if (await recordAttempt(env.DB, msg.runId, 'retrying', result, now, action)) {
+      await deliverAction(action.id, env, transport)
     }
     return
   }
-  const recorded = await recordAttempt(env.DB, msg.runId, 'failed', result, now)
+  const alertTarget = await resolveAlertTarget(env.DB, task)
+  const action: RunAction | undefined = !alertTarget ? undefined : {
+    id: `${msg.runId}:alert`, taskId: task.id, runId: msg.runId, dueAt: now, attempts: 0,
+    payload: { kind: 'alert', task: { id: task.id, name: task.name, alert: { mode: 'custom', ...alertTarget } }, run: {
+      id: msg.runId, attempt: msg.attempt, trigger: msg.trigger,
+      httpStatus: result.httpStatus, error: result.error, finishedAt: now,
+    } },
+  }
+  const recorded = await recordAttempt(env.DB, msg.runId, 'failed', result, now, action)
   await transport.finished(msg)
   // Not recorded: the run was already closed as lost; don't alert on an outcome the log doesn't show.
   if (!recorded) return
-  await sendFailureAlert(env, task, {
-    id: msg.runId,
-    attempt: msg.attempt,
-    trigger: msg.trigger,
-    httpStatus: result.httpStatus,
-    error: result.error,
-    finishedAt: now,
-  })
+  if (action) await env.TASK_SCHEDULER.getByName(task.id).scheduleAction(action.id, now)
 }
 
 /** Free the skip-mode slot in the task's scheduler. Best effort: the lease expires anyway. */

@@ -16,9 +16,12 @@ CREATE TABLE tasks (
   -- 'inherit' follows the global runtime setting.
   execution_mode TEXT NOT NULL DEFAULT 'inherit' CHECK (execution_mode IN ('inherit', 'queue', 'direct', 'worker')),
   version INTEGER NOT NULL DEFAULT 1,
+  scheduler_synced_version INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+
+CREATE INDEX idx_tasks_unsynced ON tasks (id) WHERE scheduler_synced_version < version;
 
 -- D1 bills each index a write touches as an extra row written, so runs is
 -- WITHOUT ROWID (the TEXT primary key is the table, not a separate unique index)
@@ -30,6 +33,8 @@ CREATE TABLE runs (
   trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
   status TEXT NOT NULL CHECK (status IN ('running', 'retrying', 'success', 'failed', 'skipped')),
   attempt INTEGER NOT NULL DEFAULT 1,
+  execution_mode TEXT CHECK (execution_mode IN ('queue', 'direct', 'worker')),
+  effective_timeout_ms INTEGER,
   scheduled_at INTEGER NOT NULL,
   started_at INTEGER,
   finished_at INTEGER,
@@ -43,6 +48,21 @@ CREATE TABLE runs (
 
 CREATE INDEX idx_runs_task_created ON runs (task_id, created_at DESC);
 CREATE INDEX idx_runs_inflight ON runs (updated_at) WHERE status IN ('running', 'retrying');
+
+-- Durable handoffs created atomically with their run result.
+CREATE TABLE run_actions (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL,
+  due_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  lease_until INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  failed_at INTEGER
+) WITHOUT ROWID;
+CREATE INDEX idx_run_actions_due ON run_actions (due_at) WHERE failed_at IS NULL;
+CREATE INDEX idx_run_actions_run ON run_actions (run_id);
 
 CREATE TABLE variables (
   name TEXT PRIMARY KEY,

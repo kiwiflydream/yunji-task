@@ -104,7 +104,24 @@ export async function deleteTask(db: D1Database, id: string): Promise<boolean> {
   return res.meta.changes > 0
 }
 
-export async function listAllTasks(db: D1Database): Promise<Task[]> {
-  const { results } = await db.prepare('SELECT * FROM tasks').all<TaskRow>()
+export async function listAllTasks(db: D1Database, onlyUnsynced = false): Promise<Task[]> {
+  const { results } = await db.prepare(`SELECT * FROM tasks${onlyUnsynced ? ' WHERE scheduler_synced_version < version' : ''}`).all<TaskRow>()
   return results.map(rowToTask)
+}
+
+export async function markSchedulerSynced(db: D1Database, id: string, version: number): Promise<void> {
+  await db.prepare(
+    `UPDATE tasks SET scheduler_synced_version = ? WHERE id = ? AND version = ? AND scheduler_synced_version < version`,
+  ).bind(version, id, version).run()
+}
+
+export async function markSchedulerUnsynced(db: D1Database, id: string, version: number): Promise<void> {
+  await db.prepare(
+    `UPDATE tasks SET scheduler_synced_version = 0 WHERE id = ? AND version = ? AND scheduler_synced_version >= version`,
+  ).bind(id, version).run()
+}
+
+export async function listTaskIds(db: D1Database): Promise<string[]> {
+  const { results } = await db.prepare('SELECT id FROM tasks').all<{ id: string }>()
+  return results.map((row) => row.id)
 }

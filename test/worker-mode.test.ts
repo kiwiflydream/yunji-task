@@ -2,7 +2,7 @@ import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
-import { listRuns, type RunMessage } from '../src/domain/runs-repo'
+import { getRun, listRuns, type RunMessage } from '../src/domain/runs-repo'
 import { getTask } from '../src/domain/tasks-repo'
 import { processRun } from '../src/executor/consumer'
 import { effectiveMode, executionMode, WORKER_MAX_TIMEOUT_MS } from '../src/executor/mode'
@@ -279,6 +279,7 @@ describe('worker mode', () => {
     const msg: RunMessage = { runId: crypto.randomUUID(), taskId: task.id, trigger: 'manual', scheduledAt: Date.now(), attempt: 1 }
     await executeInWorker(env, msg, 0)
     expect(timeout.mock.calls).toEqual([[Math.min(timeoutMs, 25_000)]])
+    expect(await getRun(env.DB, msg.runId)).toMatchObject({ executionMode: 'worker', effectiveTimeoutMs: Math.min(timeoutMs, 25_000) })
     expect((await getTask(env.DB, task.id))?.executor.config.timeoutMs).toBe(timeoutMs)
   })
 

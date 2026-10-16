@@ -10,6 +10,9 @@ export interface Run {
   trigger: RunTrigger
   status: RunStatus
   attempt: number
+  /** Actual transport and deadline for the current/latest attempt; skipped fires have neither. */
+  executionMode: ExecutionMode | null
+  effectiveTimeoutMs: number | null
   scheduledAt: number
   startedAt: number | null
   finishedAt: number | null

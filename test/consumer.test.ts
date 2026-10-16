@@ -26,10 +26,11 @@ function envWithQueue() {
 }
 
 function mockFetch(handler: (req: Request) => Response | Promise<Response>) {
-  const calls: Request[] = []
+  const calls: Pick<Request, 'url' | 'method' | 'headers' | 'text'>[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const req = new Request(input, init)
-    calls.push(req.clone())
+    const body = await req.clone().text()
+    calls.push({ url: req.url, method: req.method, headers: req.headers, text: async () => body })
     return handler(req)
   })
   return calls
@@ -128,6 +129,8 @@ describe('processRun', () => {
 
     const run = await getRun(env.DB, msg.runId)
     expect(run).toMatchObject({ status: 'failed', attempt: 2, httpStatus: 500 })
+    await runDurableObjectAlarm(env.TASK_SCHEDULER.getByName(task.id))
+    await vi.waitFor(() => expect(calls.some((c) => c.url === 'https://alerts.test/hook')).toBe(true))
     const alert = calls.find((c) => c.url === 'https://alerts.test/hook')!
     expect(alert.method).toBe('POST')
     expect(JSON.parse(await alert.text())).toEqual({ text: 'nightly "sync" #2: HTTP 500' })
@@ -146,6 +149,8 @@ describe('processRun', () => {
     const calls = mockFetch((req) => new Response('', { status: req.url.includes('alerts') ? 200 : 404 }))
     const msg = message(task.id)
     await processRun(msg, envWithQueue().env)
+    await runDurableObjectAlarm(env.TASK_SCHEDULER.getByName(task.id))
+    await vi.waitFor(() => expect(calls.some((c) => c.url === 'https://alerts.test/custom')).toBe(true))
     const alert = calls.find((c) => c.url === 'https://alerts.test/custom')!
     expect(JSON.parse(await alert.text())).toMatchObject({
       event: 'task.failed',

@@ -23,14 +23,15 @@ export async function executeInWorker(env: CloudflareBindings, msg: RunMessage, 
   const scheduler = env.TASK_SCHEDULER.getByName(msg.taskId)
   const transport: RunTransport = {
     ...queueTransport(env),
+    mode: 'worker',
     retry: (next, delaySeconds) =>
       scheduler.schedule({ msg: next, dueAt: Date.now() + delaySeconds * 1000, deliveries: 0, mode: 'worker' }),
   }
   try {
     await processRun(msg, env, transport, WORKER_MAX_TIMEOUT_MS)
   } catch (err) {
-    // Like a queue redelivery: if the attempt was already claimed, the
-    // redelivery is a no-op and the lost-run sweep closes it.
+    // Redelivery recovers pending handoffs without repeating a claimed HTTP
+    // attempt. A claimed attempt with no recorded result is closed by the lost-run sweep.
     console.error('worker run failed', msg.runId, err)
     if (deliveries + 1 < MAX_DELIVERIES) {
       await scheduler.schedule({ msg, dueAt: Date.now() + REDELIVERY_DELAY_MS, deliveries: deliveries + 1, mode: 'worker' })

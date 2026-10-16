@@ -1,5 +1,6 @@
-import type { Run, RunStatus, RunTrigger } from '../shared/types'
+import type { ExecutionMode, Run, RunStatus, RunTrigger } from '../shared/types'
 import { finalOutcomeStatement, lostRunsStatement, skippedStatement } from './stats-repo'
+import { insertActionStatement, type RunAction } from './actions-repo'
 
 export type { Run, RunStatus, RunTrigger }
 
@@ -18,6 +19,8 @@ interface RunRow {
   status: RunStatus
   attempt: number
   scheduled_at: number
+  execution_mode: ExecutionMode | null
+  effective_timeout_ms: number | null
   started_at: number | null
   finished_at: number | null
   duration_ms: number | null
@@ -35,6 +38,8 @@ function rowToRun(r: RunRow): Run {
     trigger: r.trigger,
     status: r.status,
     attempt: r.attempt,
+    executionMode: r.execution_mode,
+    effectiveTimeoutMs: r.effective_timeout_ms,
     scheduledAt: r.scheduled_at,
     startedAt: r.started_at,
     finishedAt: r.finished_at,
@@ -79,22 +84,27 @@ export async function insertSkippedRun(
  * Claim an attempt of a run. Returns false for duplicate queue deliveries and
  * for tasks deleted meanwhile; both must be acked without executing.
  */
-export async function claimRun(db: D1Database, msg: RunMessage, now: number): Promise<boolean> {
+export async function claimRun(
+  db: D1Database, msg: RunMessage, now: number,
+  details?: { executionMode: ExecutionMode; effectiveTimeoutMs: number },
+): Promise<boolean> {
   const res =
     msg.attempt === 1
       ? await db
           .prepare(
-            `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, started_at, created_at, updated_at)
-             SELECT ?, ?, ?, 'running', 1, ?, ?, ?, ? ${TASK_EXISTS} ON CONFLICT (id) DO NOTHING`,
+            `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, started_at, created_at, updated_at,
+              execution_mode, effective_timeout_ms)
+             SELECT ?, ?, ?, 'running', 1, ?, ?, ?, ?, ?, ? ${TASK_EXISTS} ON CONFLICT (id) DO NOTHING`,
           )
-          .bind(msg.runId, msg.taskId, msg.trigger, msg.scheduledAt, now, now, now, msg.taskId)
+          .bind(msg.runId, msg.taskId, msg.trigger, msg.scheduledAt, now, now, now,
+            details?.executionMode ?? null, details?.effectiveTimeoutMs ?? null, msg.taskId)
           .run()
       : await db
           .prepare(
-            `UPDATE runs SET status = 'running', attempt = ?, updated_at = ?
+            `UPDATE runs SET status = 'running', attempt = ?, updated_at = ?, execution_mode = ?, effective_timeout_ms = ?
              WHERE id = ? AND status = 'retrying' AND attempt = ?`,
           )
-          .bind(msg.attempt, now, msg.runId, msg.attempt - 1)
+          .bind(msg.attempt, now, details?.executionMode ?? null, details?.effectiveTimeoutMs ?? null, msg.runId, msg.attempt - 1)
           .run()
   return res.meta.changes > 0
 }
@@ -110,6 +120,7 @@ export async function recordAttempt(
   status: 'success' | 'failed' | 'retrying',
   result: { httpStatus: number | null; responseBody: string | null; error: string | null; durationMs: number },
   now: number,
+  action?: RunAction,
 ): Promise<boolean> {
   const update = db
     .prepare(
@@ -127,8 +138,12 @@ export async function recordAttempt(
       now,
       runId,
     )
-  if (status === 'retrying') return (await update.run()).meta.changes > 0
-  const [, res] = await db.batch([finalOutcomeStatement(db, runId, status, result.durationMs), update])
+  if (status === 'retrying' && !action) return (await update.run()).meta.changes > 0
+  const statements = action ? [insertActionStatement(db, action, action.payload.kind === 'retry' ? action.payload.msg.attempt - 1 : action.payload.run.attempt)] : []
+  if (status !== 'retrying') statements.push(finalOutcomeStatement(db, runId, status, result.durationMs))
+  statements.push(update)
+  const results = await db.batch(statements)
+  const res = results[results.length - 1]
   return res.meta.changes > 0
 }
 
@@ -159,7 +174,8 @@ export async function listRuns(
  * match idx_runs_inflight's WHERE clause verbatim for SQLite to use that
  * partial index instead of scanning every run.
  */
-export const LOST_WHERE = `status IN ('running', 'retrying') AND updated_at < ? AND (status = 'running' OR updated_at < ?)`
+export const LOST_WHERE = `status IN ('running', 'retrying') AND updated_at < ? AND (status = 'running' OR updated_at < ?)
+  AND NOT EXISTS (SELECT 1 FROM run_actions WHERE run_id = runs.id AND failed_at IS NULL)`
 
 /** Runs whose consumer died mid-flight never report back; close them out (counted as failed). */
 export async function markLostRuns(db: D1Database, now: number): Promise<number> {
@@ -178,7 +194,8 @@ export async function markLostRuns(db: D1Database, now: number): Promise<number>
 }
 
 export const PURGE_RUNS_SQL = `DELETE FROM runs WHERE id IN
-  (SELECT id FROM runs WHERE task_id = ? AND created_at < ? LIMIT ${PURGE_BATCH})`
+  (SELECT id FROM runs WHERE task_id = ? AND created_at < ?
+   AND NOT EXISTS (SELECT 1 FROM run_actions WHERE run_id = runs.id AND failed_at IS NULL) LIMIT ${PURGE_BATCH})`
 
 /** Delete up to PURGE_BATCH runs per task created before `cutoff`; returns the count per task. */
 export async function purgeOldRuns(db: D1Database, taskIds: string[], cutoff: number): Promise<number[]> {

@@ -33,8 +33,9 @@ async function readLimited(res: Response, limit: number): Promise<string> {
   while (size < limit) {
     const { done, value } = await reader.read()
     if (done) break
-    chunks.push(value)
-    size += value.byteLength
+    const part = value.subarray(0, limit - size)
+    chunks.push(part)
+    size += part.byteLength
   }
   if (size >= limit) await reader.cancel().catch(() => {})
   const buf = new Uint8Array(Math.min(size, limit))
@@ -90,7 +91,9 @@ export const httpExecutor: Executor<HttpConfig> = {
 
     let text: string
     try {
-      text = await readLimited(res, KEYWORD_SCAN_LIMIT)
+      // One extra byte distinguishes an exact 4 KB response from a truncated one.
+      const limit = res.ok && config.successKeyword ? KEYWORD_SCAN_LIMIT : RESPONSE_BODY_LIMIT + 1
+      text = await readLimited(res, limit)
     } catch (err) {
       return {
         ok: false,

@@ -12,7 +12,7 @@ import { RunDialog } from '../components/RunDialog'
 import { ErrorBanner, NotFound, PageLoader } from '../components/States'
 import { TaskMenu } from '../components/TaskMenu'
 import { useTaskActions } from '../components/useTaskActions'
-import { describeTaskMode } from '../lib/execution-mode'
+import { describeTaskMode, MODE_LABEL } from '../lib/execution-mode'
 import { fmtDuration, fmtRelative, fmtTime } from '../lib/format'
 
 const TaskStats = lazy(() => import('../components/TaskStats'))
@@ -118,7 +118,7 @@ function ScheduleCard({ task }: { task: TaskView }) {
             variant="alert"
             size="sm"
             icon={<WarningIcon weight="fill" />}
-            description={`调度器版本（v${st.version ?? '—'}）与配置版本（v${task.version}）不一致，对账任务会在 5 分钟内自动修复。`}
+            description={`调度器版本（v${st.version ?? '—'}）与配置版本（v${task.version}）不一致。未同步的修改会在 5 分钟内重试，每小时还会全量对账修复调度状态。`}
           />
         </div>
       )}
@@ -207,6 +207,7 @@ function RunsCard({ taskId }: { taskId: string }) {
                 <Table.Row>
                   <Table.Head>时间</Table.Head>
                   <Table.Head>触发</Table.Head>
+                  <Table.Head>实际执行方式</Table.Head>
                   <Table.Head>状态</Table.Head>
                   <Table.Head>尝试</Table.Head>
                   <Table.Head>HTTP</Table.Head>
@@ -219,6 +220,7 @@ function RunsCard({ taskId }: { taskId: string }) {
                   <Table.Row key={r.id} className="cursor-pointer" onClick={() => setSelected(r)}>
                     <Table.Cell className="whitespace-nowrap">{fmtTime(r.createdAt)}</Table.Cell>
                     <Table.Cell>{r.trigger === 'manual' ? '手动' : '调度'}</Table.Cell>
+                    <Table.Cell className="whitespace-nowrap">{r.executionMode ? MODE_LABEL[r.executionMode] : '—'}</Table.Cell>
                     <Table.Cell>
                       <RunStatusBadge status={r.status} />
                     </Table.Cell>

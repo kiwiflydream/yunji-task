@@ -95,6 +95,12 @@ async function plan(sql: string, ...params: unknown[]) {
 }
 
 describe('query plans', () => {
+  it('incremental maintenance uses the pending-action and dirty-task indexes', async () => {
+    const actions = await plan(`SELECT id FROM run_actions WHERE failed_at IS NULL AND due_at <= ? AND lease_until <= ? ORDER BY due_at LIMIT ?`, 1, 1, 100)
+    expect(actions).toMatch(/USING INDEX idx_run_actions_due/)
+    const tasks = await plan('SELECT * FROM tasks WHERE scheduler_synced_version < version')
+    expect(tasks).toMatch(/USING INDEX idx_tasks_unsynced/)
+  })
   it('the lost-run sweep reads only the in-flight partial index', async () => {
     const p = await plan(`SELECT id FROM runs WHERE ${LOST_WHERE}`, 1, 1)
     expect(p).toMatch(/USING (COVERING )?INDEX idx_runs_inflight/)

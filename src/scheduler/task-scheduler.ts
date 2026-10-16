@@ -18,6 +18,8 @@ const K_RUNNING = 'running'
 const K_ONCE_FIRED = 'onceFiredVersion'
 /** Direct / worker mode: one key per pending attempt, so concurrent runs never read-modify-write a shared list. */
 const PENDING_PREFIX = 'pending:'
+const ACTION_PREFIX = 'action:'
+interface PendingAction { id: string; dueAt: number }
 
 /** Modes in which the DO hands out runs itself (rather than the queue). */
 export type LocalMode = Exclude<ExecutionMode, 'queue'>
@@ -56,7 +58,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     const [alarm, next] = await Promise.all([storage.getAlarm(), storage.get<number>(K_NEXT)])
     const armed = alarm !== null && next !== undefined
     const wantArmed = snapshot.enabled && snapshot.scheduleType !== 'manual' && !firedThisVersion
-    const strandedPending = alarm === null && (await this.pendingRuns()).length > 0
+    const strandedPending = alarm === null && ((await this.pendingRuns()).length > 0 || (await this.pendingActions()).length > 0)
     if (current && current.version === snapshot.version && armed === wantArmed && !strandedPending) {
       return this.status()
     }
@@ -79,16 +81,18 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
   private async handleAlarm(): Promise<void> {
     const storage = this.ctx.storage
     const now = Date.now()
-    const [snapshot, next, pending] = await Promise.all([
+    const [snapshot, next, pending, actions] = await Promise.all([
       storage.get<ScheduleSnapshot>(K_SNAPSHOT),
       storage.get<number>(K_NEXT),
       this.pendingRuns(),
+      this.pendingActions(),
     ])
     // The alarm was set for the earliest of these events and fires at or after
     // it; everything due by then is due now.
-    const target = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt))
+    const target = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt))
     const horizon = Number.isFinite(target) ? Math.max(now, target) : now
     const duePending = pending.filter((p) => p.dueAt <= horizon)
+    const dueActions = actions.filter((a) => a.dueAt <= horizon)
     const nextDue = next !== undefined && next <= horizon
     const active = !!snapshot && snapshot.enabled && snapshot.scheduleType !== 'manual'
     const once = snapshot?.scheduleType === 'once'
@@ -98,6 +102,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     // State first, then re-arm, then work: a failure below never stops the
     // schedule, and nothing here can be picked up twice.
     if (duePending.length) await storage.delete(duePending.map((p) => PENDING_PREFIX + p.msg.runId))
+    if (dueActions.length) await storage.delete(dueActions.map((a) => ACTION_PREFIX + a.id))
     if (nextDue) {
       // Missed fires are not caught up: the next fire is computed from now.
       await this.setNext(active && !once ? nextFireTime(snapshot, Math.max(now, next)) : null)
@@ -106,6 +111,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     await this.rearm()
 
     for (const p of duePending) this.start(p)
+    for (const a of dueActions) this.ctx.waitUntil(this.handOffAction(a))
     if (fire) {
       await this.dispatch(snapshot, next, now)
       if (once) await this.disableFiredOnce(snapshot)
@@ -129,6 +135,20 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     await this.rearm()
   }
 
+  async scheduleAction(id: string, dueAt: number): Promise<void> {
+    await this.ctx.storage.put(ACTION_PREFIX + id, { id, dueAt })
+    await this.rearm()
+  }
+
+  private async handOffAction(action: PendingAction): Promise<void> {
+    try {
+      await this.ctx.exports.ActionExecutor.start(action.id)
+    } catch (err) {
+      console.error('action handoff failed', action.id, err)
+      await this.scheduleAction(action.id, Date.now() + REDELIVERY_DELAY_MS)
+    }
+  }
+
   async status(): Promise<SchedulerStatus> {
     const [snapshot, alarmAt, running] = await Promise.all([
       this.ctx.storage.get<ScheduleSnapshot>(K_SNAPSHOT),
@@ -150,14 +170,18 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
 
   /** Point the alarm at the earliest of the next fire and any pending attempt. */
   private async rearm(): Promise<void> {
-    const [next, pending] = await Promise.all([this.ctx.storage.get<number>(K_NEXT), this.pendingRuns()])
-    const at = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt))
+    const [next, pending, actions] = await Promise.all([this.ctx.storage.get<number>(K_NEXT), this.pendingRuns(), this.pendingActions()])
+    const at = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt))
     if (Number.isFinite(at)) await this.ctx.storage.setAlarm(at)
     else await this.ctx.storage.deleteAlarm()
   }
 
   private async pendingRuns(): Promise<PendingRun[]> {
     return [...(await this.ctx.storage.list<PendingRun>({ prefix: PENDING_PREFIX })).values()]
+  }
+
+  private async pendingActions(): Promise<PendingAction[]> {
+    return [...(await this.ctx.storage.list<PendingAction>({ prefix: ACTION_PREFIX })).values()]
   }
 
   /** Never throws (see alarm()). */
@@ -226,8 +250,8 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
   }
 
   /**
-   * Infrastructure error (D1, or the hand-off). Like a queue redelivery: if the
-   * attempt was already claimed, the redelivery is a no-op and the lost-run sweep closes it.
+   * Redelivery restores pending handoffs without executing a claimed attempt
+   * again. The lost-run sweep closes attempts that never recorded a result.
    */
   private async redeliver(p: PendingRun, err: unknown): Promise<void> {
     console.error(`${p.mode} run failed`, p.msg.runId, err)
@@ -238,6 +262,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
 
   private directTransport(): RunTransport {
     return {
+      mode: 'direct',
       retry: (next, delaySeconds) =>
         this.schedule({ msg: next, dueAt: Date.now() + delaySeconds * 1000, deliveries: 0, mode: 'direct' }),
       finished: async (msg) => {

@@ -13,12 +13,14 @@ export interface FailedRun {
   finishedAt: number
 }
 
+export type AlertTask = Pick<Task, 'id' | 'name' | 'alert'>
+
 const ALERT_TIMEOUT_MS = 10_000
 
 /** Resolve the effective alert target: the task override, else the global default. */
 export async function resolveAlertTarget(
   db: D1Database,
-  task: Task,
+  task: AlertTask,
 ): Promise<{ url: string; bodyTemplate: string } | null> {
   if (task.alert.mode === 'off') return null
   if (task.alert.mode === 'custom') return { url: task.alert.url, bodyTemplate: task.alert.bodyTemplate }
@@ -26,7 +28,7 @@ export async function resolveAlertTarget(
   return global.url ? global : null
 }
 
-export function defaultAlertPayload(task: Task, run: FailedRun) {
+export function defaultAlertPayload(task: AlertTask, run: FailedRun) {
   return {
     event: 'task.failed',
     task: { id: task.id, name: task.name },
@@ -41,8 +43,8 @@ export function defaultAlertPayload(task: Task, run: FailedRun) {
   }
 }
 
-/** Fire the failure webhook. Never throws: alert problems must not affect the run. */
-export async function sendFailureAlert(env: CloudflareBindings, task: Task, run: FailedRun): Promise<void> {
+/** Called only from the independent action worker; failures are retried from the durable outbox. */
+export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask, run: FailedRun): Promise<void> {
   let secrets: string[] = []
   try {
     const target = await resolveAlertTarget(env.DB, task)
@@ -73,9 +75,9 @@ export async function sendFailureAlert(env: CloudflareBindings, task: Task, run:
       body,
       signal: AbortSignal.timeout(ALERT_TIMEOUT_MS),
     })
-    if (!res.ok) console.error('alert webhook returned', res.status, task.id)
     await res.body?.cancel()
+    if (!res.ok) throw new Error(`alert webhook returned HTTP ${res.status}`)
   } catch (err) {
-    console.error('alert webhook failed', task.id, redact(String(err), secrets))
+    throw new Error(redact(err instanceof Error ? err.message : String(err), secrets))
   }
 }

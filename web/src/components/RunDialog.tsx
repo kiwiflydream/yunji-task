@@ -4,6 +4,7 @@ import type { Run } from '../../../src/shared/types'
 import { fmtDuration, fmtTime } from '../lib/format'
 import { RunStatusBadge } from './badges'
 import { DescriptionList } from './DescriptionList'
+import { MODE_LABEL } from '../lib/execution-mode'
 
 export function RunDialog({ run, onClose }: { run: Run | null; onClose: () => void }) {
   return (
@@ -24,6 +25,8 @@ export function RunDialog({ run, onClose }: { run: Run | null; onClose: () => vo
               items={[
                 ['Run ID', <Text variant="mono">{run.id}</Text>],
                 ['触发方式', run.trigger === 'manual' ? '手动' : '调度'],
+                ['实际执行方式', run.executionMode ? MODE_LABEL[run.executionMode] : '—'],
+                ['生效超时', run.effectiveTimeoutMs === null ? '—' : `${run.effectiveTimeoutMs / 1000} 秒`],
                 ['计划时间', fmtTime(run.scheduledAt)],
                 ['开始 / 结束', `${fmtTime(run.startedAt)} / ${fmtTime(run.finishedAt)}`],
                 ['尝试次数', run.attempt || '—'],

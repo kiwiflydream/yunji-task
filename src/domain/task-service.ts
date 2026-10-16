@@ -58,9 +58,15 @@ export function nextRunAt(task: Task, now: number): number | null {
 export async function syncScheduler(env: CloudflareBindings, task: Task): Promise<boolean> {
   try {
     await env.TASK_SCHEDULER.getByName(task.id).sync(toSnapshot(task))
+    await repo.markSchedulerSynced(env.DB, task.id, task.version)
     return true
   } catch (err) {
     console.error('scheduler sync failed; reconcile will retry', task.id, err)
+    try {
+      await repo.markSchedulerUnsynced(env.DB, task.id, task.version)
+    } catch (markError) {
+      console.error('failed to mark scheduler for retry', task.id, markError)
+    }
     return false
   }
 }

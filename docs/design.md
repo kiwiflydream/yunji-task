@@ -31,21 +31,22 @@
 | 执行路径 | 每个任务可以单独设置（`executionMode`：`inherit` / `queue` / `direct` / `worker`），`inherit` 跟随设置页保存到 D1 的全局执行方式（默认 `worker`）。见下文「执行方式」 |
 | 错过的触发 | 不补跑。下一次触发时间总是从 `max(now, 本次计划时间)` 往后算 |
 | 重叠策略 | 每任务配置：`skip`（默认）/ `parallel`。skip 模式下 DO 记录 `running {runId, leaseUntil}`，消费者结束后调用 `complete(runId)` 释放；租约过期视为释放 |
-| 失败处理 | 重试次数 0–10、间隔 1–3600 秒，用 Queue `delaySeconds` 实现；最终失败调用告警 webhook |
+| 失败处理 | 重试次数 0–10、间隔 1–3600 秒；结果与重试动作在同一 D1 事务中提交，按原方式投递，投递失败可恢复 |
 | 成功判定 | 2xx，且（如配置）响应体包含关键字。关键字在前 1MB 内匹配 |
 | 密钥 | `variables` 表，AES-GCM 加密（主密钥 `ENCRYPTION_KEY`，AAD = 变量名）。请求 URL / headers / body 与告警 URL 中用 `{{NAME}}` 引用；日志里出现的明文会被替换为 `***` |
-| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom`。默认 POST 固定结构 JSON；可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
-| 日志 | 每次执行一行 `runs`，响应体截断 4KB，保留天数在设置页配置（默认 30） |
+| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom`。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。默认 POST 固定结构 JSON；可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
+| 日志 | 每次执行一行 `runs`，保存最后一次尝试的实际方式与生效超时。响应体截断 4KB；不校验关键字时只读取 4KB + 1 字节，保留天数在设置页配置（默认 30） |
 | 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
-| 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version；对账每 5 分钟重放一次 |
+| 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version。每 5 分钟补同步未成功的版本，每小时全量对账修复 alarm |
 | 管理后台 | React + [Kumo](https://github.com/cloudflare/kumo) 单页应用（`web/`），Vite + `@cloudflare/vite-plugin` 构建为 Workers 静态资源。`run_worker_first` 只覆盖 `/`、`/health`、`/api/*`、`/admin`、`/admin/*`：`/admin/*` 先过后台认证再返回 HTML 壳，`/admin/api/*` 复用与 `/api` 相同的路由（只是认证方式不同）；`/assets/*` 下带 hash 的 JS/CSS 直接由静态资源返回（不含数据）。跟随系统深浅色。 |
 | 鉴权 | `/admin` 由 `ADMIN_AUTH_MODE` 选择：`basic`（默认，`ADMIN_USERNAME` + `ADMIN_PASSWORD`）或 `access`（Cloudflare Access JWT）；配置缺失或模式未知时返回 503（fail closed）；另有 CSRF Origin 校验。`/api` 用 `API_TOKEN` Bearer |
 | 套餐 | Workers Paid（DO、Queues、秒级负载） |
 
 ## 投递语义与幂等
 
-- Queue 至少投递一次。每次执行有 `runId`：首次 `INSERT ... ON CONFLICT DO NOTHING` 抢占，重试用 `UPDATE ... WHERE status='retrying' AND attempt=n-1` 抢占，抢占失败即视为重复消息直接 ack。
-- 消费者抢占后崩溃会留下 `running` / `retrying` 状态的 run，对账任务会把超时（running 15 分钟、retrying 75 分钟）的 run 标记为 `failed`（lost）。宁可丢一次执行，也不重复调用下游。
+- Queue 至少投递一次。每次执行有 `runId`：首次 `INSERT ... ON CONFLICT DO NOTHING` 抢占，重试用 `UPDATE ... WHERE status='retrying' AND attempt=n-1` 抢占。重复消息不调用任务接口，但会恢复该 run 尚未完成的投递动作。
+- `run_actions` 与执行结果在同一个 D1 batch 中写入，保存重试的原方式、消息及到期时间，或失败告警的配置快照。动作以 45 秒租约抢占，成功后删除；重试投递失败继续保留，告警耗尽后保留失败原因。DO 用 `action:<id>` 共用 alarm，再交给独立 `ActionExecutor`；维护任务每 5 分钟恢复待投递及过期租约。发送成功但确认前中断可能重复投递；任务接口有 attempt 抢占，告警接收方应按 `run.id` 去重。
+- 消费者抢占后崩溃会留下 `running` / `retrying` 状态的 run，对账任务会把超时（running 15 分钟、retrying 75 分钟）且没有待投递动作的 run 标记为 `failed`（lost）。宁可丢一次执行，也不重复调用下游。待投递动作存在时不做 lost 或日志到期清理；删除 run 时级联删除动作。
 - DO alarm 处理函数不抛异常（避免 alarm 自动重试导致重复投递）；投递失败只记日志，由下一次触发继续。
 - 抢占是幂等的，所以 Queue 重投一个已经抢占过的 run 不会再执行一次。Queue 的自动重投只在抢占之前出错（例如 D1 暂时不可用）时有用；direct 模式用 30 秒后重新投递来模拟（最多 3 次）。
 - once 任务触发后，DO 记录 `onceFiredVersion` 并尝试把 D1 中的任务停用（version + 1）；如果这一步失败，对账时会补做。
@@ -75,11 +76,12 @@
 
 ## 数据模型（D1）
 
-- `tasks`：配置（扁平列 + `executor_config` / `alert_config` JSON）、`version`。
-- `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、时间、`http_status`、`response_body(≤4KB)`、`error`。
+- `tasks`：配置（扁平列 + `executor_config` / `alert_config` JSON）、`version`、`scheduler_synced_version`。同步成功仅确认对应版本，失败保持未同步；增量维护走未同步任务的部分索引。
+- `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、`execution_mode`、`effective_timeout_ms`、时间、`http_status`、`response_body(≤4KB)`、`error`。跳过的触发没有实际方式和超时。
+- `run_actions`（`WITHOUT ROWID`）：动作 ID、run / task ID、JSON 负载、到期时间、尝试次数、租约、失败原因和终止时间；按到期时间的部分索引恢复未完成动作，按 run ID 查找和级联删除。
 - `run_stats_hourly`：主键 `(task_id, hour)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
-- `settings`：`key` → JSON（`alert` 为全局告警，`runtime` 为运行设置）。
+- `settings`：`key` → JSON（`alert` 为全局告警，`runtime` 为运行设置；内部 `maintenance:scheduler-reconcile` 的更新时间用于控制每小时全量对账）。
 
 下次触发时间不落库，列表页按 cron 现算，避免秒级任务每秒写 D1。
 
