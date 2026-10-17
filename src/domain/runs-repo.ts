@@ -111,7 +111,7 @@ export async function claimRun(
 
 /**
  * Record the result of the attempt currently `running`. Final outcomes are
- * counted into the hourly stats in the same transaction. Returns false when
+ * counted into the statistics in the same transaction. Returns false when
  * the run had already been closed (e.g. marked lost), in which case nothing changes.
  */
 export async function recordAttempt(

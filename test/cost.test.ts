@@ -51,7 +51,7 @@ function meteredDb(db: D1Database) {
 const success = { httpStatus: 200, responseBody: 'ok', error: null, durationMs: 120 }
 
 describe('rows written per run', () => {
-  it('a successful run costs 3 (claim) + 1 (stats, +1 for the hour\'s first run) + 1 (result) + 1 (purge)', async () => {
+  it('a successful run costs 3 (claim) + 1 (stats, +1 for the minute\'s first run) + 1 (result) + 1 (purge)', async () => {
     const task = await createTaskRow()
     const { db, meter } = meteredDb(env.DB)
     const at = Date.UTC(2026, 9, 16, 9, 10)
@@ -70,7 +70,7 @@ describe('rows written per run', () => {
       })
     }
     expect(costs).toEqual([
-      { claim: 3, result: 3 }, // stats row insert + its hour index, run update
+      { claim: 3, result: 3 }, // stats row insert + its time index, run update
       { claim: 3, result: 2 },
     ])
     expect(await write(() => purgeOldRuns(db, [task.id], Number.MAX_SAFE_INTEGER))).toBe(2)
@@ -80,7 +80,7 @@ describe('rows written per run', () => {
     const task = await createTaskRow()
     const { db, meter } = meteredDb(env.DB)
     const at = Date.UTC(2026, 9, 16, 9, 20)
-    await insertSkippedRun(db, { taskId: task.id, scheduledAt: at, reason: 'busy' }, at) // first of the hour
+    await insertSkippedRun(db, { taskId: task.id, scheduledAt: at, reason: 'busy' }, at) // first of the minute
     const before = meter.written
     await insertSkippedRun(db, { taskId: task.id, scheduledAt: at + 1000, reason: 'busy' }, at + 1000)
     expect(meter.written - before).toBe(3)
@@ -110,6 +110,13 @@ describe('query plans', () => {
   it('retention purge seeks the per-task index', async () => {
     const p = await plan(PURGE_RUNS_SQL, 't', 1)
     expect(p).toMatch(/USING (COVERING )?INDEX idx_runs_task_created \(task_id=\? AND created_at<\?\)/)
+  })
+
+  it('minute statistics use time and per-task indexes', async () => {
+    expect(await plan('SELECT SUM(success) FROM run_stats WHERE bucket >= ? AND bucket <= ?', 1, 2))
+      .toMatch(/USING INDEX idx_run_stats_bucket/)
+    expect(await plan('SELECT SUM(success) FROM run_stats WHERE task_id = ? AND bucket >= ? AND bucket <= ?', 'task', 1, 2))
+      .toMatch(/USING PRIMARY KEY \(task_id=\? AND bucket>\? AND bucket<\?\)/)
   })
 })
 

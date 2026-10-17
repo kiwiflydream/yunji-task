@@ -7,6 +7,7 @@ import {
   bucketize,
   bucketIndex,
   emptyAgg,
+  floorMinute,
   HOUR_MS,
   percentile,
   rankTasks,
@@ -110,10 +111,10 @@ describe('bucketize', () => {
     const w = statsWindow('30d', now, 'Asia/Shanghai')
     const today = w.buckets[29]
     const out = bucketize(w, [
-      { hour: today, agg: agg({ success: 1 }) },
-      { hour: today + 5 * HOUR_MS, agg: agg({ failed: 2 }) },
-      { hour: today - HOUR_MS, agg: agg({ success: 4 }) }, // 23:00 yesterday
-      { hour: w.from - HOUR_MS, agg: agg({ success: 100 }) },
+      { start: today, agg: agg({ success: 1 }) },
+      { start: today + 5 * HOUR_MS, agg: agg({ failed: 2 }) },
+      { start: today - HOUR_MS, agg: agg({ success: 4 }) }, // 23:00 yesterday
+      { start: w.from - HOUR_MS, agg: agg({ success: 100 }) },
     ])
     expect(out).toHaveLength(30)
     expect(out[29]).toMatchObject({ success: 1, failed: 2 })
@@ -136,7 +137,7 @@ describe('rankTasks', () => {
 })
 
 interface StatsRow {
-  hour: number
+  bucket: number
   success: number
   failed: number
   skipped: number
@@ -150,7 +151,7 @@ interface StatsRow {
 }
 
 async function statsRows(taskId: string) {
-  const { results } = await env.DB.prepare('SELECT * FROM run_stats_hourly WHERE task_id = ? ORDER BY hour')
+  const { results } = await env.DB.prepare('SELECT * FROM run_stats WHERE task_id = ? ORDER BY bucket')
     .bind(taskId)
     .all<StatsRow>()
   return results
@@ -174,11 +175,11 @@ const result = (durationMs: number) => ({ httpStatus: 200, responseBody: null, e
 
 describe('stats accumulation', () => {
   beforeEach(async () => {
-    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats_hourly'), env.DB.prepare("DELETE FROM settings WHERE key = 'alert'")])
+    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats'), env.DB.prepare("DELETE FROM settings WHERE key = 'alert'")])
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it('counts a scheduled success with its duration and scheduling delay in the scheduled hour', async () => {
+  it('counts a scheduled success with its duration and scheduling delay in the scheduled minute', async () => {
     const task = await createTaskRow()
     const scheduledAt = Date.UTC(2026, 9, 16, 8, 59, 58)
     const msg = message(task.id, { trigger: 'schedule', scheduledAt })
@@ -187,7 +188,7 @@ describe('stats accumulation', () => {
 
     const [row] = await statsRows(task.id)
     expect(row).toMatchObject({
-      hour: Date.UTC(2026, 9, 16, 8),
+      bucket: Date.UTC(2026, 9, 16, 8, 59),
       success: 1,
       failed: 0,
       duration_count: 1,
@@ -200,7 +201,7 @@ describe('stats accumulation', () => {
     expect((row as unknown as Record<string, number>).dur_b2).toBe(1)
   })
 
-  it('keeps the maximum duration and delay across runs in the same hour', async () => {
+  it('keeps the maximum duration and delay across runs in the same minute', async () => {
     const task = await createTaskRow()
     const hour = Date.UTC(2026, 9, 16, 5)
     for (const [delay, duration] of [[500, 300], [100, 100]]) {
@@ -268,7 +269,7 @@ describe('stats accumulation', () => {
 
   it('lost-run sweeps count each lost run once, without a duration', async () => {
     const task = await createTaskRow()
-    const at = Date.now() - RUNNING_STALE_MS - 1000
+    const at = floorMinute(Date.now() - RUNNING_STALE_MS - 60_000) + 2000
     for (let i = 0; i < 3; i++) await claimRun(env.DB, message(task.id, { trigger: 'schedule', scheduledAt: at - 200 }), at)
     await claimRun(env.DB, message(task.id, { scheduledAt: at - 900 }), at) // manual: no delay
     await markLostRuns(env.DB, Date.now())
@@ -283,7 +284,7 @@ describe('stats accumulation', () => {
     const at = Date.UTC(2026, 9, 16, 3, 10)
     await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: at, reason: 'busy' }, at)
     await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: at + 1000, reason: 'busy' }, at + 1000)
-    expect(await statsRows(task.id)).toMatchObject([{ hour: Date.UTC(2026, 9, 16, 3), skipped: 2, success: 0 }])
+    expect(await statsRows(task.id)).toMatchObject([{ bucket: Date.UTC(2026, 9, 16, 3, 10), skipped: 2, success: 0 }])
   })
 
   it('deleting a task deletes its stats', async () => {
@@ -310,9 +311,10 @@ describe('stats accumulation', () => {
 describe('stats API', () => {
   const AUTH = { authorization: `Bearer ${env.API_TOKEN}` }
   const get = (path: string) => app.request(`http://yunji-task.test/api${path}`, { headers: AUTH }, env)
+  afterEach(() => vi.restoreAllMocks())
 
   beforeEach(async () => {
-    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats_hourly'), env.DB.prepare('DELETE FROM runs')])
+    await env.DB.batch([env.DB.prepare('DELETE FROM run_stats'), env.DB.prepare('DELETE FROM runs')])
   })
 
   async function seed(taskId: string, outcomes: ('success' | 'failed')[], durationMs: number) {
@@ -347,6 +349,57 @@ describe('stats API', () => {
     const body = (await (await get('/stats/overview?range=90d&tz=UTC')).json()) as StatsOverview
     expect(body.granularity).toBe('day')
     expect(body.series).toHaveLength(90)
+  })
+
+  it.each(['30d', '90d'] as const)('%s keeps fractional-timezone boundaries exact after run logs expire', async (range) => {
+    const now = Date.UTC(2026, 10, 20, 12)
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const task = await createTaskRow()
+    for (const tz of ['Asia/Kathmandu', 'Asia/Kolkata', 'America/St_Johns', 'Australia/Lord_Howe', 'Pacific/Chatham', '+05:17']) {
+      await env.DB.batch([env.DB.prepare('DELETE FROM run_stats'), env.DB.prepare('DELETE FROM runs')])
+      const window = statsWindow(range, now, tz)
+      await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: window.from - 1, reason: 'outside' }, now)
+      for (const [at, outcome] of [
+        [window.from + 60_000, 'success'],
+        [window.buckets[1] - 1, 'failed'],
+        [window.buckets[1], 'success'],
+      ] as const) {
+        const msg = message(task.id, { scheduledAt: at })
+        await claimRun(env.DB, msg, at)
+        await recordAttempt(env.DB, msg.runId, outcome, result(120), at + 120)
+      }
+      await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: window.buckets[1] + 1000, reason: 'inside' }, now)
+      await env.DB.prepare('DELETE FROM runs').run()
+
+      const overview = (await (await get(`/stats/overview?range=${range}&tz=${encodeURIComponent(tz)}`)).json()) as StatsOverview
+      const details = (await (await get(`/tasks/${task.id}/stats?range=${range}&tz=${encodeURIComponent(tz)}`)).json()) as TaskStats
+      for (const body of [overview, details]) {
+        expect(body.summary, tz).toMatchObject({ total: 4, success: 2, failed: 1, skipped: 1 })
+        expect(body.series[0], tz).toMatchObject({ t: window.from, success: 1, failed: 1, skipped: 0 })
+        expect(body.series[1], tz).toMatchObject({ t: window.buckets[1], success: 1, failed: 0, skipped: 1 })
+        expect(body.series.reduce((sum, p) => sum + p.success + p.failed + p.skipped, 0), tz).toBe(4)
+      }
+      expect(overview.topFailing, tz).toMatchObject([{ taskId: task.id, total: 4, failed: 1 }])
+      expect(details.histogram.reduce((sum, b) => sum + b.count, 0), tz).toBe(3)
+    }
+  })
+
+  it('keeps runs on the right date through a half-hour DST transition', async () => {
+    const now = Date.UTC(2026, 9, 16, 12)
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const task = await createTaskRow()
+    const window = statsWindow('30d', now, 'Australia/Lord_Howe')
+    const shortDay = window.buckets.findIndex((start, i) => window.buckets[i + 1] - start === 23.5 * HOUR_MS)
+    expect(shortDay).toBeGreaterThanOrEqual(0)
+    for (const at of [window.buckets[shortDay], window.buckets[shortDay + 1] - 1, window.buckets[shortDay + 1]]) {
+      const msg = message(task.id, { scheduledAt: at })
+      await claimRun(env.DB, msg, at)
+      await recordAttempt(env.DB, msg.runId, 'success', result(10), at + 10)
+    }
+    const body = (await (await get(`/tasks/${task.id}/stats?range=30d&tz=Australia%2FLord_Howe`)).json()) as TaskStats
+    expect(body.summary.success).toBe(3)
+    expect(body.series[shortDay].success).toBe(2)
+    expect(body.series[shortDay + 1].success).toBe(1)
   })
 
   it('task stats cover only that task and include the histogram', async () => {

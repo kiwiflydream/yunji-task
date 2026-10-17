@@ -1,10 +1,13 @@
 import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { getTask } from '../src/domain/tasks-repo'
 import { listRuns } from '../src/domain/runs-repo'
-import type { TaskScheduler } from '../src/scheduler/task-scheduler'
-import { captureQueue, createTaskRow, snapshotFor, toSnapshot } from './helpers'
+import type { PendingRun, TaskScheduler } from '../src/scheduler/task-scheduler'
+import { processRun } from '../src/executor/consumer'
+import { captureQueue, createTaskRow, setRuntimeSettings, snapshotFor, toSnapshot } from './helpers'
+
+afterEach(() => vi.restoreAllMocks())
 
 const stubFor = (taskId: string) => env.TASK_SCHEDULER.getByName(taskId)
 const storedNext = (stub: DurableObjectStub<TaskScheduler>) =>
@@ -145,4 +148,80 @@ describe('TaskScheduler.alarm', () => {
     expect(await runDurableObjectAlarm(stub)).toBe(false)
     expect(sent).toHaveLength(0)
   })
+
+  it('retains a failed once handoff across reconciliation and mode changes, then executes once', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('ok'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const task = await createTaskRow({ schedule: { type: 'once', runAt: Date.now() + 60_000 }, alert: { mode: 'off' } })
+    const stub = stubFor(task.id)
+    await stub.sync(toSnapshot(task))
+    await breakQueue(stub)
+    await runDurableObjectAlarm(stub)
+    const [entry] = await pending(stub)
+    expect(entry).toMatchObject({ mode: 'queue', msg: { scheduledAt: task.schedule.type === 'once' ? task.schedule.runAt : 0, attempt: 1 } })
+    expect((await getTask(env.DB, task.id))?.enabled).toBe(false)
+
+    await setRuntimeSettings({ executionMode: 'worker' })
+    await stub.sync(toSnapshot(task))
+    const disabled = (await getTask(env.DB, task.id))!
+    await runInDurableObject(stub, (_i, state) => state.storage.deleteAlarm())
+    expect((await stub.sync(toSnapshot(disabled))).alarmAt).toBe(entry.dueAt)
+    const sent = await captureQueue(stub)
+    await runDurableObjectAlarm(stub)
+    expect(sent).toEqual([entry.msg])
+    expect(await pending(stub)).toEqual([])
+    expect((await stub.status()).alarmAt).toBeNull()
+    await processRun(entry.msg, env)
+    await processRun(entry.msg, env)
+    expect(fetch).toHaveBeenCalledOnce()
+    expect(await listRuns(env.DB, task.id, { limit: 10 })).toMatchObject([{ status: 'success', executionMode: 'queue' }])
+    expect(await runDurableObjectAlarm(stub)).toBe(false)
+  })
+
+  it('keeps the same queue handoff through a prolonged outage instead of discarding it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const task = await createTaskRow({ schedule: { type: 'once', runAt: Date.now() + 60_000 } })
+    const stub = stubFor(task.id)
+    await stub.sync(toSnapshot(task))
+    await breakQueue(stub)
+    let runId: string | undefined
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      await runDurableObjectAlarm(stub)
+      const entries = await pending(stub)
+      expect(entries).toHaveLength(1)
+      runId ??= entries[0].msg.runId
+      expect(entries[0]).toMatchObject({ deliveries: attempt, msg: { runId, attempt: 1 } })
+      expect((await stub.status()).alarmAt).toBe(entries[0].dueAt)
+    }
+    const sent = await captureQueue(stub)
+    await runDurableObjectAlarm(stub)
+    expect(sent).toMatchObject([{ runId }])
+    expect(await pending(stub)).toEqual([])
+  })
+
+  it('a queued handoff waiting for recovery still blocks overlapping scheduled runs after lease expiry', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const task = await createTaskRow()
+    const stub = stubFor(task.id)
+    await stub.sync({ ...toSnapshot(task), leaseMs: -1 })
+    await breakQueue(stub)
+    await runDurableObjectAlarm(stub)
+    const [entry] = await pending(stub)
+    await runDurableObjectAlarm(stub)
+    expect(await pending(stub)).toEqual([entry])
+    expect(await listRuns(env.DB, task.id, { limit: 10 })).toMatchObject([{ status: 'skipped' }])
+  })
 })
+
+const pending = (stub: DurableObjectStub<TaskScheduler>) =>
+  runInDurableObject(stub, async (_i, state) => [...(await state.storage.list<PendingRun>({ prefix: 'pending:' })).values()])
+
+async function breakQueue(stub: DurableObjectStub<TaskScheduler>) {
+  await runInDurableObject(stub, (instance) => {
+    const real = (instance as unknown as { env: CloudflareBindings }).env
+    Object.defineProperty(instance, 'env', {
+      configurable: true,
+      value: Object.create(real, { RUN_QUEUE: { value: { send: async () => { throw new Error('temporary queue outage') } } } }),
+    })
+  })
+}

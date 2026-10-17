@@ -16,7 +16,7 @@ const K_NEXT = 'nextRunAt'
 const K_RUNNING = 'running'
 /** Version of a once task that already fired; it must never be re-armed. */
 const K_ONCE_FIRED = 'onceFiredVersion'
-/** Direct / worker mode: one key per pending attempt, so concurrent runs never read-modify-write a shared list. */
+/** One key per pending attempt or queue handoff. */
 const PENDING_PREFIX = 'pending:'
 const ACTION_PREFIX = 'action:'
 interface PendingAction { id: string; dueAt: number }
@@ -25,21 +25,19 @@ interface PendingAction { id: string; dueAt: number }
 export type LocalMode = Exclude<ExecutionMode, 'queue'>
 
 /** An attempt waiting for its time (a retry, or a redelivery after an infrastructure error). */
-export interface PendingRun {
+export type PendingRun = {
   msg: RunMessage
   dueAt: number
-  /** Failed deliveries so far; mirrors the queue's max_retries for infrastructure errors. */
+  /** Delivery count; local execution caps retries, queue handoffs remain pending until acknowledged. */
   deliveries: number
-  /** Where it runs when due: inside this DO, or handed to the RunExecutor Worker. */
-  mode: LocalMode
-}
+} & ({ mode: LocalMode } | { mode: 'queue'; leaseMs: number })
 
 /**
  * One instance per task (name = taskId). Owns the task's alarm. Depending on
  * the task's effective execution mode it sends runs to the queue, executes them
  * itself (direct) or hands them to the RunExecutor Worker (worker). In the last
- * two it also keeps their pending retries, sharing the one alarm between the
- * next fire and the earliest pending attempt.
+ * two it also keeps their pending retries. Unacknowledged queue handoffs share
+ * the same alarm with those retries and the next scheduled fire.
  */
 export class TaskScheduler extends DurableObject<CloudflareBindings> {
   /** Apply a snapshot from D1. Idempotent; stale versions are ignored. */
@@ -101,7 +99,8 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
 
     // State first, then re-arm, then work: a failure below never stops the
     // schedule, and nothing here can be picked up twice.
-    if (duePending.length) await storage.delete(duePending.map((p) => PENDING_PREFIX + p.msg.runId))
+    const localPending = duePending.filter((p) => p.mode !== 'queue')
+    if (localPending.length) await storage.delete(localPending.map((p) => PENDING_PREFIX + p.msg.runId))
     if (dueActions.length) await storage.delete(dueActions.map((a) => ACTION_PREFIX + a.id))
     if (nextDue) {
       // Missed fires are not caught up: the next fire is computed from now.
@@ -110,7 +109,10 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     }
     await this.rearm()
 
-    for (const p of duePending) this.start(p)
+    for (const p of duePending) {
+      if (p.mode === 'queue') await this.sendToQueue(p)
+      else this.start(p)
+    }
     for (const a of dueActions) this.ctx.waitUntil(this.handOffAction(a))
     if (fire) {
       await this.dispatch(snapshot, next, now)
@@ -191,7 +193,10 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       const skip = snapshot.overlapPolicy === 'skip'
       if (skip) {
         const running = await storage.get<RunningSlot>(K_RUNNING)
-        if (running && running.leaseUntil > now) {
+        const waiting = running && running.leaseUntil <= now
+          ? await storage.get<PendingRun>(PENDING_PREFIX + running.runId)
+          : undefined
+        if (running && (running.leaseUntil > now || waiting?.mode === 'queue')) {
           await insertSkippedRun(
             this.env.DB,
             { taskId: snapshot.taskId, scheduledAt, reason: `previous run ${running.runId} still in progress` },
@@ -214,15 +219,29 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
         this.start({ msg, dueAt: now, deliveries: 0, mode })
         return
       }
-      try {
-        await runQueue(this.env).send(msg)
-      } catch (err) {
-        if (skip) await storage.delete(K_RUNNING)
-        throw err
-      }
+      await this.sendToQueue({ msg, dueAt: now, deliveries: 0, mode, leaseMs: snapshot.leaseMs })
     } catch (err) {
       console.error('dispatch failed', snapshot.taskId, err)
     }
+  }
+
+  private async sendToQueue(p: Extract<PendingRun, { mode: 'queue' }>): Promise<void> {
+    // Keep the original run ID until acknowledgement, including interrupted sends.
+    const delay = Math.min(REDELIVERY_DELAY_MS * 2 ** Math.min(p.deliveries, 4), 5 * 60_000)
+    await this.schedule({ ...p, dueAt: Date.now() + delay, deliveries: p.deliveries + 1 })
+    try {
+      if (p.deliveries > 0) {
+        const running = await this.ctx.storage.get<RunningSlot>(K_RUNNING)
+        if (running?.runId === p.msg.runId) {
+          await this.ctx.storage.put(K_RUNNING, { ...running, leaseUntil: Date.now() + p.leaseMs })
+        }
+      }
+      await runQueue(this.env).send(p.msg)
+      await this.ctx.storage.delete(PENDING_PREFIX + p.msg.runId)
+    } catch (err) {
+      console.error('queue handoff failed; retained for redelivery', p.msg.runId, err)
+    }
+    await this.rearm()
   }
 
   /**

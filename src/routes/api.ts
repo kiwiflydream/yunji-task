@@ -13,7 +13,7 @@ import { VARIABLE_NAME_RE } from '../lib/template'
 import { isValidTimezone } from '../lib/time'
 import type { StatsOverview, TaskStats } from '../shared/types'
 import { addAgg, bucketize, emptyAgg, histogram, rankTasks, STATS_RANGES, statsWindow, summarize, toPoints } from '../domain/stats'
-import { statsByHour, statsByTask } from '../domain/stats-repo'
+import { statsForWindow, statsByTask } from '../domain/stats-repo'
 
 const variableBodySchema = z.object({
   value: z.string().min(1).max(16 * 1024),
@@ -40,15 +40,15 @@ function parseStatsQuery(query: Record<string, string>) {
 }
 
 async function seriesFor(db: D1Database, window: ReturnType<typeof statsWindow>, taskId?: string) {
-  const hourly = await statsByHour(db, window.from, window.to, taskId)
-  const total = hourly.reduce((acc, h) => addAgg(acc, h.agg), emptyAgg())
+  const rows = await statsForWindow(db, window, taskId)
+  const total = rows.reduce((acc, row) => addAgg(acc, row.agg), emptyAgg())
   const base = {
     range: window.range,
     granularity: window.granularity,
     from: window.from,
     to: window.to,
     summary: summarize(total),
-    series: toPoints(window, bucketize(window, hourly)),
+    series: toPoints(window, bucketize(window, rows)),
   }
   return { base, total }
 }

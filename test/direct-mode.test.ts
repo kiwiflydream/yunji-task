@@ -69,7 +69,7 @@ describe('direct mode', () => {
     const status = await stub.status()
     expect(status.running).toBeNull()
     expect(status.alarmAt).toBeGreaterThan(Date.now())
-    const stats = await env.DB.prepare('SELECT SUM(success) AS s FROM run_stats_hourly WHERE task_id = ?').bind(task.id).first<{ s: number }>()
+    const stats = await env.DB.prepare('SELECT SUM(success) AS s FROM run_stats WHERE task_id = ?').bind(task.id).first<{ s: number }>()
     expect(stats?.s).toBe(1)
   })
 

@@ -36,7 +36,7 @@
 | 密钥 | `variables` 表，AES-GCM 加密（主密钥 `ENCRYPTION_KEY`，AAD = 变量名）。请求 URL / headers / body 与告警 URL 中用 `{{NAME}}` 引用；日志里出现的明文会被替换为 `***` |
 | 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom` / `sender`。`sender` 和全局 `senderTopic` 经 Service Binding `SENDER` 调 cf-sender 的 `send()`，带 `yunji-task:alert:<run.id>` 幂等键；全局 `mode` 明确选择 `webhook` / `sender` / `off`，按所选方式发送，缺少绑定时明确失败。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。全局 Webhook 默认提供 Bark JSON 模板；Body 模板留空则 POST 固定结构事件 JSON。可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
 | 日志 | 每次执行一行 `runs`，保存最后一次尝试的实际方式与生效超时。响应体截断 4 KiB；没有正文校验时只读取 4 KiB + 1 字节，高级正文／JSON 条件最多读取 1 MiB + 1 字节用于判断是否超限，保留天数在设置页配置（默认 30） |
-| 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
+| 统计 | 写入时预聚合到 `run_stats`（任务 × 分钟），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
 | 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version。每 5 分钟补同步未成功的版本，每小时全量对账修复 alarm |
 | 管理后台 | React + [Kumo](https://github.com/cloudflare/kumo) 单页应用（`web/`），Vite + `@cloudflare/vite-plugin` 构建为 Workers 静态资源。`run_worker_first` 只覆盖 `/`、`/health`、`/api/*`、`/admin`、`/admin/*`：`/admin/*` 先过后台认证再返回 HTML 壳，`/admin/api/*` 复用与 `/api` 相同的路由（只是认证方式不同）；`/assets/*` 下带 hash 的 JS/CSS 直接由静态资源返回（不含数据）。跟随系统深浅色。 |
 | 鉴权 | `/admin` 由 `ADMIN_AUTH_MODE` 选择：`basic`（默认，`ADMIN_USERNAME` + `ADMIN_PASSWORD`）或 `access`（Cloudflare Access JWT）；配置缺失或模式未知时返回 503（fail closed）；另有 CSRF Origin 校验。`/api` 用 `API_TOKEN` Bearer |
@@ -79,7 +79,7 @@
 - `tasks`：配置（扁平列 + `executor_config` / `alert_config` JSON）、`version`、`scheduler_synced_version`。同步成功仅确认对应版本，失败保持未同步；增量维护走未同步任务的部分索引。
 - `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、`execution_mode`、`effective_timeout_ms`、时间、`http_status`、`response_body(≤4KB)`、`error`。跳过的触发没有实际方式和超时。
 - `run_actions`（`WITHOUT ROWID`）：动作 ID、run / task ID、JSON 负载、到期时间、尝试次数、租约、失败原因和终止时间；按到期时间的部分索引恢复未完成动作，按 run ID 查找和级联删除。
-- `run_stats_hourly`：主键 `(task_id, hour)`，见下文「统计」。
+- `run_stats`：主键 `(task_id, bucket)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
 - `settings`：`key` → JSON（`alert` 为全局告警，`runtime` 为运行设置；内部 `maintenance:scheduler-reconcile` 的更新时间用于控制每小时全量对账）。
 
@@ -88,11 +88,11 @@
 ## 统计
 
 - **口径**：只统计最终结果，每个 run 计一次——成功、最终失败（含重试耗尽和被对账标记为 lost 的）、跳过。`retrying` 等中间状态不计。成功率 = 成功 ÷（成功 + 失败），不含跳过。
-- **归属的小时**：按 `scheduled_at` 所在的 UTC 小时。
+- **归属的分钟**：按 `scheduled_at` 所在的 UTC 分钟。
 - **耗时**：最后一次尝试的 `duration_ms`，记入 11 档直方图（≤50 / 100 / 250 / 500ms / 1 / 2.5 / 5 / 10 / 30 / 60s / 更长），同时记 count / sum / max。P50 / P95 在直方图上线性插值估算，并且不超过实际最大值。lost 的 run 没有耗时。
 - **调度延迟**：`started_at - scheduled_at`，只统计定时触发（手动触发没有计划时间）。
 - **写入**：统计 upsert 和把 run 移出 `running` 的 UPDATE 放在同一个 D1 batch（事务）里，前者以 `status = 'running'` 为条件，后者也只更新 `running` 的 run。所以重复投递、对账先一步标记 lost、晚到的结果都不会重复计数；晚到的结果不会覆盖 lost，也不会再发告警。跳过的执行和对账标记 lost 也在同一个 batch 里计数。
-- **查询**：24h / 7d 按小时，30d / 90d 按浏览器时区的自然日（由前端传 `tz`，服务端把小时行归到当地的日）。半小时时区的日边界会有半小时误差。空桶补 0。
+- **查询**：24h / 7d 按小时，30d / 90d 按浏览器时区的自然日（由前端传 `tz`，服务端在 D1 中把分钟行归到当地的日，按实际日边界处理夏令时）。支持半小时、45 分钟和固定分钟偏移；空桶补 0，查询返回行数最多等于图表点数。
 - 删除任务时一并删除它的统计。
 - **前端**：「统计」页（全局）和任务详情页（单任务）。图表用 Kumo `Chart` + 按需注册的 ECharts，懒加载。每张图都有表格视图。颜色经过 dataviz 校验：成功 / 失败用 Kumo 的语义色（深色模式单独取值），红绿在色觉障碍模拟下 ΔE ≈ 6.3，属于需要辅助编码的区间，所以堆叠段之间留 2px 表面色间隔（7 天视图柱子过密时为 1px），并保持固定顺序（成功在下），同时配图例和表格。
 
@@ -104,7 +104,7 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 |---|---|
 | 抢占（INSERT） | 3：表本身 + 按任务的索引 + 执行中索引 |
 | 记录结果（UPDATE） | 1：离开执行中索引不计费 |
-| 统计 upsert | 1（该小时第一次执行为 2） |
+| 统计 upsert | 1（该分钟第一次执行为 2） |
 | 到期清理（DELETE） | 1 |
 | **合计** | **约 6** |
 
@@ -115,7 +115,7 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 
 插入 run 时会在同一条语句里确认任务还存在，所以不会产生按任务清理清不到的孤儿记录。
 
-统计行数只和任务数 × 小时数有关（100 个任务保留 90 天约 21.6 万行），与执行频率无关。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或在设置页调小日志保留天数。
+统计只为有结果的任务／分钟保存一行；100 个任务每分钟都有结果且保留 90 天，最多约 1296 万行。与小时聚合相比，高频任务的统计存储和查询扫描量最多增加 60 倍，可单独缩短统计保留天数。1 秒一次的任务一个月约 260 万次执行；按默认保留 30 天、每条 ≤4KB 计最坏约 10GB，接近 D1 单库上限。高频任务应让下游返回简短响应体，或在设置页调小日志保留天数。
 
 ## 配置
 

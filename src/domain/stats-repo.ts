@@ -1,11 +1,11 @@
-import { BUCKET_COUNT, bucketIndex, emptyAgg, floorHour, HOUR_MS, type Agg } from './stats'
+import { BUCKET_COUNT, bucketIndex, emptyAgg, floorMinute, MINUTE_MS, HOUR_MS, type Agg, type StatsWindow } from './stats'
 
 const BUCKET_COLS = Array.from({ length: BUCKET_COUNT }, (_, i) => `dur_b${i}`)
 const SUM_COLS = ['success', 'failed', 'skipped', 'duration_count', 'duration_sum', ...BUCKET_COLS, 'delay_count', 'delay_sum']
 const MAX_COLS = ['duration_max', 'delay_max']
 const INSERT_COLS = [
   'task_id',
-  'hour',
+  'bucket',
   'success',
   'failed',
   'skipped',
@@ -18,12 +18,12 @@ const INSERT_COLS = [
   'delay_max',
 ].join(', ')
 
-const ON_CONFLICT = `ON CONFLICT (task_id, hour) DO UPDATE SET ${[
+const ON_CONFLICT = `ON CONFLICT (task_id, bucket) DO UPDATE SET ${[
   ...SUM_COLS.map((c) => `${c} = ${c} + excluded.${c}`),
   ...MAX_COLS.map((c) => `${c} = MAX(${c}, excluded.${c})`),
 ].join(', ')}`
 
-const HOUR_OF_SCHEDULED = `scheduled_at - scheduled_at % ${HOUR_MS}`
+const BUCKET_OF_SCHEDULED = `scheduled_at - scheduled_at % ${MINUTE_MS}`
 /** Scheduling delay of a scheduled run, or NULL for manual runs / runs that never started. */
 const DELAY = `CASE WHEN trigger = 'schedule' AND started_at IS NOT NULL THEN MAX(0, started_at - scheduled_at) END`
 
@@ -42,8 +42,8 @@ export function finalOutcomeStatement(
   buckets[bucketIndex(durationMs)] = 1
   return db
     .prepare(
-      `INSERT INTO run_stats_hourly (${INSERT_COLS})
-       SELECT task_id, ${HOUR_OF_SCHEDULED}, ?, ?, 0, 1, ?, ?, ${BUCKET_COLS.map(() => '?').join(', ')},
+      `INSERT INTO run_stats (${INSERT_COLS})
+       SELECT task_id, ${BUCKET_OF_SCHEDULED}, ?, ?, 0, 1, ?, ?, ${BUCKET_COLS.map(() => '?').join(', ')},
          (${DELAY}) IS NOT NULL, COALESCE(${DELAY}, 0), COALESCE(${DELAY}, 0)
        FROM runs WHERE id = ? AND status = 'running'
        ${ON_CONFLICT}`,
@@ -53,8 +53,8 @@ export function finalOutcomeStatement(
 
 export function skippedStatement(db: D1Database, taskId: string, scheduledAt: number): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO run_stats_hourly (task_id, hour, skipped) VALUES (?, ?, 1) ${ON_CONFLICT}`)
-    .bind(taskId, floorHour(scheduledAt))
+    .prepare(`INSERT INTO run_stats (task_id, bucket, skipped) VALUES (?, ?, 1) ${ON_CONFLICT}`)
+    .bind(taskId, floorMinute(scheduledAt))
 }
 
 /**
@@ -64,8 +64,8 @@ export function skippedStatement(db: D1Database, taskId: string, scheduledAt: nu
 export function lostRunsStatement(db: D1Database, where: string, params: unknown[]): D1PreparedStatement {
   return db
     .prepare(
-      `INSERT INTO run_stats_hourly (task_id, hour, failed, delay_count, delay_sum, delay_max)
-       SELECT task_id, ${HOUR_OF_SCHEDULED} AS h, COUNT(*), COUNT(${DELAY}), COALESCE(SUM(${DELAY}), 0), COALESCE(MAX(${DELAY}), 0)
+      `INSERT INTO run_stats (task_id, bucket, failed, delay_count, delay_sum, delay_max)
+       SELECT task_id, ${BUCKET_OF_SCHEDULED} AS h, COUNT(*), COUNT(${DELAY}), COALESCE(SUM(${DELAY}), 0), COALESCE(MAX(${DELAY}), 0)
        FROM runs WHERE ${where}
        GROUP BY task_id, h
        ${ON_CONFLICT}`,
@@ -74,7 +74,7 @@ export function lostRunsStatement(db: D1Database, where: string, params: unknown
 }
 
 export function deleteTaskStatsStatement(db: D1Database, taskId: string): D1PreparedStatement {
-  return db.prepare('DELETE FROM run_stats_hourly WHERE task_id = ?').bind(taskId)
+  return db.prepare('DELETE FROM run_stats WHERE task_id = ?').bind(taskId)
 }
 
 export const STATS_PURGE_BATCH = 5000
@@ -82,8 +82,8 @@ export const STATS_PURGE_BATCH = 5000
 export async function purgeOldStats(db: D1Database, cutoff: number): Promise<number> {
   const res = await db
     .prepare(
-      `DELETE FROM run_stats_hourly WHERE (task_id, hour) IN
-       (SELECT task_id, hour FROM run_stats_hourly WHERE hour < ? LIMIT ${STATS_PURGE_BATCH})`,
+      `DELETE FROM run_stats WHERE (task_id, bucket) IN
+       (SELECT task_id, bucket FROM run_stats WHERE bucket < ? LIMIT ${STATS_PURGE_BATCH})`,
     )
     .bind(cutoff)
     .run()
@@ -113,24 +113,28 @@ function rowToAgg(r: AggRow): Agg {
   return agg
 }
 
-/** Aggregates per hour in [from, to], across all tasks or for one task. */
-export async function statsByHour(
+/** Merge minutes in D1 so a request returns at most one row per chart point. */
+export async function statsForWindow(
   db: D1Database,
-  from: number,
-  to: number,
+  window: StatsWindow,
   taskId?: string,
-): Promise<{ hour: number; agg: Agg }[]> {
-  const stmt = taskId
-    ? db
-        .prepare(
-          `SELECT hour, ${aggSelect()} FROM run_stats_hourly WHERE task_id = ? AND hour >= ? AND hour <= ? GROUP BY hour`,
-        )
-        .bind(taskId, from, to)
-    : db
-        .prepare(`SELECT hour, ${aggSelect()} FROM run_stats_hourly WHERE hour >= ? AND hour <= ? GROUP BY hour`)
-        .bind(from, to)
+): Promise<{ start: number; agg: Agg }[]> {
+  const taskFilter = taskId === undefined ? '' : 'AND s.task_id = ?'
+  const taskParams = taskId === undefined ? [] : [taskId]
+  const stmt = window.granularity === 'hour'
+    ? db.prepare(
+        `SELECT s.bucket - s.bucket % ${HOUR_MS} AS start, ${aggSelect('s.')}
+         FROM run_stats s WHERE s.bucket >= ? AND s.bucket <= ? ${taskFilter} GROUP BY start`,
+      ).bind(window.from, window.to, ...taskParams)
+    : db.prepare(
+        `WITH starts(start) AS (VALUES ${window.buckets.map(() => '(?)').join(', ')}),
+         periods AS (SELECT start, LEAD(start, 1, ?) OVER (ORDER BY start) AS end FROM starts)
+         SELECT p.start, ${aggSelect('s.')} FROM periods p JOIN run_stats s
+           ON s.bucket >= p.start AND s.bucket < p.end ${taskFilter}
+         GROUP BY p.start`,
+      ).bind(...window.buckets, window.to + 1, ...taskParams)
   const { results } = await stmt.all<AggRow>()
-  return results.map((r) => ({ hour: r.hour, agg: rowToAgg(r) }))
+  return results.map((r) => ({ start: r.start, agg: rowToAgg(r) }))
 }
 
 /** Aggregates per existing task in [from, to]. */
@@ -142,8 +146,8 @@ export async function statsByTask(
   const { results } = await db
     .prepare(
       `SELECT s.task_id, t.name, ${aggSelect('s.')}
-       FROM run_stats_hourly s JOIN tasks t ON t.id = s.task_id
-       WHERE s.hour >= ? AND s.hour <= ? GROUP BY s.task_id`,
+       FROM run_stats s JOIN tasks t ON t.id = s.task_id
+       WHERE s.bucket >= ? AND s.bucket <= ? GROUP BY s.task_id`,
     )
     .bind(from, to)
     .all<AggRow & { task_id: string; name: string }>()

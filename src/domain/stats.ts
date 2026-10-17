@@ -1,5 +1,5 @@
 // Pure statistics helpers: duration histogram, percentile estimation and
-// bucketing of hourly aggregates into chart series. No D1 access here.
+// bucketing aggregates into chart series. No D1 access here.
 import type {
   DurationBucket,
   StatsGranularity,
@@ -16,7 +16,12 @@ export const STATS_RANGES = ['24h', '7d', '30d', '90d'] as const satisfies reado
 export const DURATION_BOUNDS = [50, 100, 250, 500, 1000, 2500, 5000, 10_000, 30_000, 60_000] as const
 export const BUCKET_COUNT = DURATION_BOUNDS.length + 1
 
-export const HOUR_MS = 60 * 60_000
+export const MINUTE_MS = 60_000
+export const HOUR_MS = 60 * MINUTE_MS
+
+export function floorMinute(epochMs: number): number {
+  return epochMs - (epochMs % MINUTE_MS)
+}
 
 export function bucketIndex(durationMs: number): number {
   const i = DURATION_BOUNDS.findIndex((bound) => durationMs <= bound)
@@ -27,7 +32,7 @@ export function floorHour(epochMs: number): number {
   return epochMs - (epochMs % HOUR_MS)
 }
 
-/** Additive aggregate of any number of hourly rows. */
+/** Additive aggregate of any number of statistics rows. */
 export interface Agg {
   success: number
   failed: number
@@ -149,18 +154,18 @@ export function statsWindow(range: StatsRange, now: number, tz: string): StatsWi
   return { range, granularity: 'day', from: buckets[0], to: now, buckets }
 }
 
-/** Assign each hourly aggregate to the window bucket containing it; empty buckets stay zero. */
-export function bucketize(window: StatsWindow, hourly: { hour: number; agg: Agg }[]): Agg[] {
+/** Assign aggregates to the window buckets; empty buckets stay zero. */
+export function bucketize(window: StatsWindow, rows: { start: number; agg: Agg }[]): Agg[] {
   const out = window.buckets.map(() => emptyAgg())
   const { buckets } = window
-  for (const { hour, agg } of hourly) {
-    if (hour < window.from || hour > window.to) continue
-    // Last bucket whose start is <= hour.
+  for (const { start, agg } of rows) {
+    if (start < window.from || start > window.to) continue
+    // Last bucket whose start is <= the aggregate start.
     let lo = 0
     let hi = buckets.length - 1
     while (lo < hi) {
       const mid = (lo + hi + 1) >> 1
-      if (buckets[mid] <= hour) lo = mid
+      if (buckets[mid] <= start) lo = mid
       else hi = mid - 1
     }
     addAgg(out[lo], agg)
