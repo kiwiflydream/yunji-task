@@ -3,14 +3,27 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "deploy": "vite build && wrangler deploy",
+    "deploy": "vite build && pnpm db:migrate:remote && wrangler deploy",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --strict-vars=false",
     "typecheck": "tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p test",
     "test": "vitest run",
-    "db:migrate:local": "wrangler d1 migrations apply cf-task --local",
-    "db:migrate:remote": "wrangler d1 migrations apply cf-task --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "build": "vite build",
     "preview": "vite build && vite preview"
+  },
+  "cloudflare": {
+    "bindings": {
+      "ADMIN_PASSWORD": {
+        "description": "后台登录密码，用户名默认是 `admin`。请设置独立的强密码。"
+      },
+      "API_TOKEN": {
+        "description": "REST API 的访问令牌，可用 `openssl rand -hex 32` 生成。请求时放在 `Authorization: Bearer <API_TOKEN>` 中。"
+      },
+      "ENCRYPTION_KEY": {
+        "description": "用于加密任务变量，必须是 32 字节随机密钥的 Base64 编码。用 `openssl rand -base64 32` 生成并妥善保存，丢失或更换后已存变量将无法解密。"
+      }
+    }
   },
   "dependencies": {
     "@cloudflare/kumo": "^2.14.0",

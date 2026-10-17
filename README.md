@@ -1,5 +1,7 @@
 # cf-task
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/YOUR_USERNAME/cf-task)
+
 运行在 Cloudflare 上的轻量定时任务系统：秒级 cron / 一次性 / 手动触发，HTTP 执行器，失败重试与告警，执行统计图表，[Kumo](https://github.com/cloudflare/kumo) 管理后台 + REST API。设计见 [docs/design.md](docs/design.md)。
 
 技术栈：Hono · Workers · Durable Objects（每任务一个，alarm 调度）· Queues（执行）· D1（配置与日志）；后台是 React + Kumo 单页应用，由 Vite + `@cloudflare/vite-plugin` 构建为 Workers 静态资源。需要 Workers Paid 套餐。
@@ -16,7 +18,7 @@ test/       vitest（在 workerd 中运行）
 
 ```sh
 pnpm install
-cp .dev.vars.example .dev.vars   # 填入 ENCRYPTION_KEY：openssl rand -base64 32
+cp .dev.vars.example .dev.vars   # 填入 API_TOKEN、ENCRYPTION_KEY 和 ADMIN_PASSWORD，生成方式见文件注释
 pnpm db:migrate:local
 pnpm dev                          # Vite + Worker：http://localhost:5173/admin（admin / .dev.vars 里的 ADMIN_PASSWORD）
 ```
@@ -30,15 +32,34 @@ pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.
 
 ## 部署
 
+### 一键部署
+
+项目尚未发布到 GitHub，顶部按钮中的 `https://github.com/YOUR_USERNAME/cf-task` 是占位地址。发布为公开仓库后，将它替换为实际仓库地址，按钮即可直接导入本项目。
+
+点击顶部按钮，按以下步骤部署。流程见 [Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。
+
+1. 登录 Cloudflare，授权 GitHub 或 GitLab，将项目复制到自己的仓库。
+2. 确认 Worker、D1 和 Queue 的名称，Cloudflare 会根据 `wrangler.jsonc` 创建并绑定资源。
+3. 填写下面三个密钥，再确认部署。
+
+| 密钥 | 填写方式 |
+|---|---|
+| `ADMIN_PASSWORD` | 设置独立的强密码，用于后台登录，默认用户名为 `admin` |
+| `API_TOKEN` | 用 `openssl rand -hex 32` 生成，用于 REST API 的 Bearer 认证 |
+| `ENCRYPTION_KEY` | 用 `openssl rand -base64 32` 生成，用于加密任务变量；妥善保存，更换后已存变量将无法解密 |
+
+构建和部署命令会从 `package.json` 自动读取，保留默认值即可。部署脚本会构建应用、执行尚未应用的 D1 迁移，再发布 Worker。部署成功后打开应用地址的 `/admin`，用 `admin` 和刚设置的 `ADMIN_PASSWORD` 登录。
+
+### 命令行部署
+
 ```sh
 wrangler d1 create cf-task              # 把输出的 database_id 填进 wrangler.jsonc
 wrangler queues create cf-task-runs     # 不用队列方式时不需要这两个队列
 wrangler queues create cf-task-runs-dlq
-pnpm db:migrate:remote
 wrangler secret put API_TOKEN           # 任意强随机字符串
 wrangler secret put ENCRYPTION_KEY      # openssl rand -base64 32；丢失后已存变量无法解密
 wrangler secret put ADMIN_PASSWORD      # 后台 basic 认证密码
-pnpm deploy                             # vite build && wrangler deploy
+pnpm deploy                             # 构建、执行 D1 迁移并发布 Worker
 ```
 
 ## 配置
