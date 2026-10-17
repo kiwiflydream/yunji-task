@@ -8,7 +8,8 @@ import type { ExecutionMode } from '../shared/types'
 import { runQueue } from './mode'
 import { getExecutor } from './registry'
 import type { ExecutionResult } from './types'
-import { resolveAlertTarget } from './alert'
+import { resolveAlertTarget, targetToAlert } from './alert'
+import { hasSender } from './sender'
 
 export async function handleRunBatch(batch: MessageBatch<RunMessage>, env: CloudflareBindings): Promise<void> {
   await Promise.all(
@@ -110,10 +111,10 @@ export async function processRun(
     }
     return
   }
-  const alertTarget = await resolveAlertTarget(env.DB, task)
+  const alertTarget = await resolveAlertTarget(env.DB, task, hasSender(env))
   const action: RunAction | undefined = !alertTarget ? undefined : {
     id: `${msg.runId}:alert`, taskId: task.id, runId: msg.runId, dueAt: now, attempts: 0,
-    payload: { kind: 'alert', task: { id: task.id, name: task.name, alert: { mode: 'custom', ...alertTarget } }, run: {
+    payload: { kind: 'alert', task: { id: task.id, name: task.name, alert: targetToAlert(alertTarget) }, run: {
       id: msg.runId, attempt: msg.attempt, trigger: msg.trigger,
       httpStatus: result.httpStatus, error: result.error, finishedAt: now,
     } },

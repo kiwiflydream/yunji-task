@@ -3,6 +3,7 @@ import { getAlertSettings } from '../domain/settings'
 import type { Task } from '../domain/task'
 import { resolveVariables } from '../domain/variables'
 import { jsonStringEscape, redact, referencedVariables, renderTemplate } from '../lib/template'
+import { hasSender, senderService } from './sender'
 
 export interface FailedRun {
   id: string
@@ -17,15 +18,33 @@ export type AlertTask = Pick<Task, 'id' | 'name' | 'alert'>
 
 const ALERT_TIMEOUT_MS = 10_000
 
-/** Resolve the effective alert target: the task override, else the global default. */
+export type AlertTarget =
+  | { kind: 'webhook'; url: string; bodyTemplate: string }
+  | { kind: 'sender'; topic: string }
+
+/**
+ * Resolve the effective alert target: the task override, else the global
+ * default. Globally, a cf-sender topic wins over the webhook while the SENDER
+ * binding exists; without the binding the webhook (if any) is the fallback.
+ */
 export async function resolveAlertTarget(
   db: D1Database,
   task: AlertTask,
-): Promise<{ url: string; bodyTemplate: string } | null> {
+  senderAvailable: boolean,
+): Promise<AlertTarget | null> {
   if (task.alert.mode === 'off') return null
-  if (task.alert.mode === 'custom') return { url: task.alert.url, bodyTemplate: task.alert.bodyTemplate }
+  if (task.alert.mode === 'custom') return { kind: 'webhook', url: task.alert.url, bodyTemplate: task.alert.bodyTemplate }
+  if (task.alert.mode === 'sender') return { kind: 'sender', topic: task.alert.topic }
   const global = await getAlertSettings(db)
-  return global.url ? global : null
+  if (global.senderTopic && (senderAvailable || !global.url)) return { kind: 'sender', topic: global.senderTopic }
+  return global.url ? { kind: 'webhook', url: global.url, bodyTemplate: global.bodyTemplate } : null
+}
+
+/** The persisted form of a resolved target, so a queued alert keeps the target chosen at failure time. */
+export function targetToAlert(target: AlertTarget): AlertTask['alert'] {
+  return target.kind === 'sender'
+    ? { mode: 'sender', topic: target.topic }
+    : { mode: 'custom', url: target.url, bodyTemplate: target.bodyTemplate }
 }
 
 export function defaultAlertPayload(task: AlertTask, run: FailedRun) {
@@ -43,12 +62,50 @@ export function defaultAlertPayload(task: AlertTask, run: FailedRun) {
   }
 }
 
+const TRIGGER_LABEL = { schedule: '定时', manual: '手动' } as const
+
+/** Markdown alert for cf-sender; values are inline code so task output cannot inject formatting. */
+export function senderAlertMessage(task: AlertTask, run: FailedRun) {
+  const code = (v: string) => `\`${v.replace(/`/g, "'").replace(/\s+/g, ' ').slice(0, 500)}\``
+  return {
+    title: `任务失败：${task.name}`,
+    body: [
+      `- 错误：${code(run.error ?? '未知错误')}`,
+      run.httpStatus === null ? null : `- HTTP 状态：${run.httpStatus}`,
+      `- 第 ${run.attempt} 次尝试 · ${TRIGGER_LABEL[run.trigger]}触发`,
+      `- 结束时间：${new Date(run.finishedAt).toISOString()}`,
+      `- 任务 ID：${code(task.id)} · 执行 ID：${code(run.id)}`,
+    ]
+      .filter((l) => l !== null)
+      .join('\n'),
+    format: 'markdown' as const,
+    level: 'error' as const,
+    tags: ['cf-task'],
+  }
+}
+
 /** Called only from the independent action worker; failures are retried from the durable outbox. */
 export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask, run: FailedRun): Promise<void> {
+  const target = await resolveAlertTarget(env.DB, task, hasSender(env))
+  if (!target) return
+  if (target.kind === 'sender') {
+    const sender = senderService(env)
+    if (!sender) throw new Error('alert targets cf-sender but the SENDER service binding is not configured (see wrangler.jsonc "services")')
+    // The key makes outbox retries safe: cf-sender returns the first message instead of sending again.
+    await sender.send({ topic: target.topic, ...senderAlertMessage(task, run) }, { idempotencyKey: `cf-task:alert:${run.id}` })
+    return
+  }
+  await sendWebhookAlert(env, target, task, run)
+}
+
+async function sendWebhookAlert(
+  env: CloudflareBindings,
+  target: Extract<AlertTarget, { kind: 'webhook' }>,
+  task: AlertTask,
+  run: FailedRun,
+): Promise<void> {
   let secrets: string[] = []
   try {
-    const target = await resolveAlertTarget(env.DB, task)
-    if (!target) return
     const variables = await resolveVariables(
       env.DB,
       env.ENCRYPTION_KEY,

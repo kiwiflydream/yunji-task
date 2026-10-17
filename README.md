@@ -131,6 +131,8 @@ pnpm deploy                             # vite build && wrangler deploy
 
 最终失败告警也先持久化，再由独立 Worker 发送，不占用任务请求的 25 秒上限所在的后台执行窗口。告警目标和模板取失败时的配置；单次发送最多 10 秒，失败后间隔 30、60 秒重试，最多发送 3 次。中断后的投递由每 5 分钟的维护任务恢复。投递采用至少一次语义：发送成功但确认写入前中断时，可能重复，接收端可按 `run.id` 去重。
 
+**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置」填全局 cf-sender 主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `cf-task:alert:<run.id>` 幂等键，重试不会重复发送。全局同时填了主题和 webhook 时优先主题；没有绑定时退回 webhook。
+
 响应体无成功关键字校验时只读取日志需要的前 4KB（另读 1 字节判断是否截断）；需要校验关键字时仍扫描前 1MB。
 
 编辑页会根据任务的超时和近 7 天的 P95 耗时给出建议，并估算每百万次的费用。只给建议，不会自动切换。

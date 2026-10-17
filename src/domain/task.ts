@@ -32,6 +32,10 @@ export const scheduleSchema = z
     if (err) ctx.addIssue({ code: 'custom', path: ['cron'], message: err })
   })
 
+/** cf-sender topic slug (same rule as cf-sender's topics). */
+export const SENDER_TOPIC_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const senderTopicSchema = z.string().trim().regex(SENDER_TOPIC_RE, '主题标识只能包含小写字母、数字、点、下划线和连字符')
+
 export const alertSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('inherit') }),
   z.object({ mode: z.literal('off') }),
@@ -40,6 +44,8 @@ export const alertSchema = z.discriminatedUnion('mode', [
     url: z.string().trim().min(1).max(2048),
     bodyTemplate: z.string().max(8000).default(''),
   }),
+  // Delivered through the cf-sender service binding (SENDER) to a topic.
+  z.object({ mode: z.literal('sender'), topic: senderTopicSchema }),
 ])
 
 export const taskInputSchema = z.object({

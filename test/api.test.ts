@@ -178,14 +178,14 @@ describe('variables API', () => {
 
 describe('settings API', () => {
   it('reads and writes the global alert target', async () => {
-    expect(await (await call('/settings/alert')).json()).toEqual({ alert: { url: '', bodyTemplate: '' } })
+    expect(await (await call('/settings/alert')).json()).toEqual({ alert: { url: '', bodyTemplate: '', senderTopic: '' } })
     const res = await call('/settings/alert', {
       method: 'PUT',
       body: JSON.stringify({ url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}' }),
     })
     expect(res.status).toBe(200)
     expect(await (await call('/settings/alert')).json()).toEqual({
-      alert: { url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}' },
+      alert: { url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderTopic: '' },
     })
   })
 })

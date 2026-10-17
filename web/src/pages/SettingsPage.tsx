@@ -40,7 +40,7 @@ export function SettingsPage() {
         ) : alert.isError ? (
           <ErrorBanner error={alert.error} />
         ) : (
-          <AlertForm initial={alert.data} />
+          <AlertForm initial={alert.data} senderAvailable={me.data?.senderAvailable ?? false} />
         )}
         <LayerCard>
           <LayerCard.Secondary>
@@ -184,9 +184,10 @@ function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
   )
 }
 
-function AlertForm({ initial }: { initial: AlertSettings }) {
+function AlertForm({ initial, senderAvailable }: { initial: AlertSettings; senderAvailable: boolean }) {
   const [form, setForm] = useState(initial)
   const [error, setError] = useState<string | null>(null)
+  const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof AlertSettings, string>>>({})
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
   const save = useMutation({
@@ -194,9 +195,14 @@ function AlertForm({ initial }: { initial: AlertSettings }) {
     onSuccess: (saved) => {
       qc.setQueryData(['alert'], saved)
       setError(null)
+      setFieldErrors({})
       toasts.add({ title: '告警设置已保存', variant: 'success' })
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : errorMessage(err)),
+    onError: (err) => {
+      const topic = err instanceof ApiError ? err.issues.find((i) => i.path === 'senderTopic') : undefined
+      setFieldErrors(topic ? { senderTopic: topic.message } : {})
+      setError(topic ? null : err instanceof ApiError ? err.message : errorMessage(err))
+    },
   })
   return (
     <LayerCard>
@@ -204,7 +210,7 @@ function AlertForm({ initial }: { initial: AlertSettings }) {
         <div className="flex flex-col">
           <span>全局失败告警</span>
           <Text size="xs" variant="secondary">
-            任务的告警方式为「使用全局设置」时，最终失败会调用这里的 webhook。
+            任务的告警方式为「使用全局设置」时，最终失败发到这里：优先 cf-sender 主题，其次 webhook。
           </Text>
         </div>
       </LayerCard.Secondary>
@@ -216,6 +222,19 @@ function AlertForm({ initial }: { initial: AlertSettings }) {
             save.mutate()
           }}
         >
+          <Input
+            label="cf-sender 主题（可选）"
+            className="font-mono"
+            placeholder="ops-alert"
+            value={form.senderTopic}
+            onChange={(e) => setForm({ ...form, senderTopic: e.target.value })}
+            description={
+              senderAvailable
+                ? '设置后通过 cf-sender 扇出到该主题的所有渠道，下面的 webhook 不再使用。'
+                : '当前部署没有配置 SENDER 服务绑定：主题和 webhook 都填写时使用 webhook，只填主题时告警会失败。'
+            }
+            {...(fieldErrors.senderTopic ? { error: fieldErrors.senderTopic } : {})}
+          />
           <Input
             label="Webhook URL（可选）"
             className="font-mono"

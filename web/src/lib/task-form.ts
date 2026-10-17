@@ -8,7 +8,7 @@ export interface HeaderRow {
 }
 
 export type ScheduleKind = 'cron' | 'once' | 'manual'
-export type AlertMode = 'inherit' | 'off' | 'custom'
+export type AlertMode = 'inherit' | 'off' | 'custom' | 'sender'
 
 /** Editable form state; numbers stay strings until submit so inputs can be cleared. */
 export interface TaskFormState {
@@ -31,6 +31,7 @@ export interface TaskFormState {
   alertMode: AlertMode
   alertUrl: string
   alertBodyTemplate: string
+  alertTopic: string
   executionMode: TaskExecutionMode
 }
 
@@ -56,6 +57,7 @@ export const emptyTaskForm: TaskFormState = {
   alertMode: 'inherit',
   alertUrl: '',
   alertBodyTemplate: '',
+  alertTopic: '',
   executionMode: 'inherit',
 }
 
@@ -82,6 +84,7 @@ export function taskToForm(task: Task): TaskFormState {
     alertMode: task.alert.mode,
     alertUrl: task.alert.mode === 'custom' ? task.alert.url : '',
     alertBodyTemplate: task.alert.mode === 'custom' ? task.alert.bodyTemplate : '',
+    alertTopic: task.alert.mode === 'sender' ? task.alert.topic : '',
     executionMode: task.executionMode,
   }
 }
@@ -136,7 +139,9 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
       alert:
         f.alertMode === 'custom'
           ? { mode: 'custom', url: f.alertUrl, bodyTemplate: f.alertBodyTemplate }
-          : { mode: f.alertMode },
+          : f.alertMode === 'sender'
+            ? { mode: 'sender', topic: f.alertTopic }
+            : { mode: f.alertMode },
       executionMode: f.executionMode,
     },
   }
@@ -159,6 +164,7 @@ const PATH_TO_FIELD: [prefix: string, field: FormField][] = [
   ['retry.intervalSeconds', 'retryIntervalSeconds'],
   ['alert.url', 'alertUrl'],
   ['alert.bodyTemplate', 'alertBodyTemplate'],
+  ['alert.topic', 'alertTopic'],
   ['executionMode', 'executionMode'],
 ]
 

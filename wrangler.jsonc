@@ -55,6 +55,12 @@
       }
     ]
   },
+  // Failure alerts through cf-sender (multi-channel notification gateway).
+  // Deploy cf-sender first, then uncomment and run `pnpm cf-typegen`; without
+  // this binding, alerts set to a cf-sender topic fall back to the webhook.
+  // "services": [
+  //   { "binding": "SENDER", "service": "cf-sender", "entrypoint": "SenderRpc" }
+  // ],
   "triggers": {
     // Reconcile D1 -> DO, mark lost runs, purge old logs.
     "crons": ["*/5 * * * *"]

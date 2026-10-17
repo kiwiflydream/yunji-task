@@ -73,6 +73,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
   const [, navigate] = useLocation()
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const [f, setF] = useState(initial)
   const [errors, setErrors] = useState<Partial<Record<FormField, string>>>({})
   const [otherIssues, setOtherIssues] = useState<Issue[]>([])
@@ -284,7 +285,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           </div>
         </Section>
 
-        <Section title="失败告警" description="最后一次重试仍失败时调用 webhook。">
+        <Section title="失败告警" description="最后一次重试仍失败时发出告警。">
           <Radio.Group
             legend="告警方式"
             orientation="horizontal"
@@ -293,8 +294,24 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           >
             <Radio.Item label="使用全局设置" value="inherit" />
             <Radio.Item label="关闭" value="off" />
-            <Radio.Item label="自定义" value="custom" />
+            <Radio.Item label="自定义 Webhook" value="custom" />
+            <Radio.Item label="cf-sender 主题" value="sender" />
           </Radio.Group>
+          {f.alertMode === 'sender' && (
+            <Input
+              label="主题标识"
+              className="font-mono"
+              placeholder="ops-alert"
+              value={f.alertTopic}
+              onChange={(e) => set('alertTopic', e.target.value)}
+              description={
+                me.data && !me.data.senderAvailable
+                  ? '当前部署没有配置 SENDER 服务绑定，告警会发送失败。见 wrangler.jsonc 的 services。'
+                  : '通过 cf-sender 扇出到该主题绑定的所有渠道（飞书、Telegram、邮件等）。'
+              }
+              {...err('alertTopic')}
+            />
+          )}
           {f.alertMode === 'custom' && (
             <>
               <Input

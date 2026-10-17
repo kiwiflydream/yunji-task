@@ -4,6 +4,7 @@ import { secureHeaders } from 'hono/secure-headers'
 import { requireAdmin, type AdminVariables } from '../auth/admin'
 import { getRuntimeSettings } from '../domain/settings'
 import { hasRunQueue } from '../executor/mode'
+import { hasSender } from '../executor/sender'
 import type { AdminMe } from '../shared/types'
 import { apiRoutes } from './api'
 
@@ -26,6 +27,7 @@ admin.get('/api/me', async (c) => {
     user: c.get('adminUser'),
     authMode: c.env.ADMIN_AUTH_MODE?.trim() === 'access' ? 'access' : 'basic',
     queueAvailable: hasRunQueue(c.env),
+    senderAvailable: hasSender(c.env),
   })
 })
 admin.route('/api', apiRoutes)

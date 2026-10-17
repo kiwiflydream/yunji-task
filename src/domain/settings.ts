@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { DEFAULT_RUNTIME_SETTINGS, type RuntimeSettings } from '../shared/types'
+import { SENDER_TOPIC_RE } from './task'
 
 export const runtimeSettingsSchema = z.object({
   executionMode: z.enum(['worker', 'queue', 'direct']),
@@ -26,6 +27,12 @@ export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettin
 export const alertSettingsSchema = z.object({
   url: z.string().trim().max(2048).default(''),
   bodyTemplate: z.string().max(8000).default(''),
+  /** cf-sender topic; takes precedence over `url` when the SENDER binding exists. */
+  senderTopic: z
+    .string()
+    .trim()
+    .default('')
+    .refine((t) => t === '' || SENDER_TOPIC_RE.test(t), '主题标识只能包含小写字母、数字、点、下划线和连字符'),
 })
 
 export type AlertSettings = z.output<typeof alertSettingsSchema>

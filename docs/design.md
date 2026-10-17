@@ -34,7 +34,7 @@
 | 失败处理 | 重试次数 0–10、间隔 1–3600 秒；结果与重试动作在同一 D1 事务中提交，按原方式投递，投递失败可恢复 |
 | 成功判定 | 2xx，且（如配置）响应体包含关键字。关键字在前 1MB 内匹配 |
 | 密钥 | `variables` 表，AES-GCM 加密（主密钥 `ENCRYPTION_KEY`，AAD = 变量名）。请求 URL / headers / body 与告警 URL 中用 `{{NAME}}` 引用；日志里出现的明文会被替换为 `***` |
-| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom`。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。默认 POST 固定结构 JSON；可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
+| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom` / `sender`。`sender` 和全局 `senderTopic` 经 Service Binding `SENDER` 调 cf-sender 的 `send()`，带 `cf-task:alert:<run.id>` 幂等键；全局主题仅在绑定存在时优先于 webhook。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。默认 POST 固定结构 JSON；可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
 | 日志 | 每次执行一行 `runs`，保存最后一次尝试的实际方式与生效超时。响应体截断 4KB；不校验关键字时只读取 4KB + 1 字节，保留天数在设置页配置（默认 30） |
 | 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
 | 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version。每 5 分钟补同步未成功的版本，每小时全量对账修复 alarm |

@@ -45,6 +45,7 @@ export interface SchedulerStatus {
 export interface AlertSettings {
   url: string
   bodyTemplate: string
+  senderTopic: string
 }
 
 export interface Issue {
@@ -80,6 +81,8 @@ export interface AdminMe extends RuntimeSettings {
   authMode: AdminAuthMode
   /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
   queueAvailable: boolean
+  /** Whether the SENDER (cf-sender) service binding is configured. */
+  senderAvailable: boolean
 }
 
 export type StatsRange = '24h' | '7d' | '30d' | '90d'
