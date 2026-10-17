@@ -44,10 +44,13 @@ export function TaskMenu({ task, onDeleted }: { task: Task; onDeleted?: () => vo
         confirmLabel={tr("删除")}
         pending={remove.isPending}
         onConfirm={async () => {
-          // mutateAsync resolves even if this menu unmounts mid-flight, unlike per-call onSuccess.
-          await remove.mutateAsync(task.id).catch(() => undefined)
+          try {
+            await remove.mutateAsync(task.id)
+          } catch {
+            return
+          }
           setConfirming(false)
-          if (!remove.isError) onDeleted?.()
+          onDeleted?.()
         }}
       />
     </>

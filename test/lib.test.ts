@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 import { decryptString, encryptString } from '../src/lib/crypto'
 import { nextFireTime, validateCron } from '../src/lib/schedule'
-import { redact, renderTemplate, referencedVariables, UnknownVariableError } from '../src/lib/template'
+import { jsonStringEscape, redact, renderTemplate, referencedVariables, UnknownVariableError } from '../src/lib/template'
 import { formatInZone, zonedTimeToEpoch } from '../src/lib/time'
 
 const cron = (expr: string, timezone = 'Asia/Shanghai') => ({
@@ -62,6 +62,11 @@ describe('template', () => {
     expect(() => renderTemplate('{{A}}{{B}}', { A: '1' })).toThrow('B')
   })
 
+  it.each(['constructor', 'toString', '__proto__'])('rejects inherited placeholder %s', (name) => {
+    expect(() => renderTemplate(`{{${name}}}`, {})).toThrow(UnknownVariableError)
+    expect(renderTemplate(`{{${name}}}`, { [name]: 'explicit-value' })).toBe('explicit-value')
+  })
+
   it('lists only dot-free names as variable references', () => {
     expect(referencedVariables('{{A}} {{task.name}}', '{{B}} {{A}}').sort()).toEqual(['A', 'B'])
   })
@@ -69,6 +74,15 @@ describe('template', () => {
   it('redacts secrets', () => {
     expect(redact('token=supersecret&x=1', ['supersecret'])).toBe('token=***&x=1')
     expect(redact('abc', ['ab'])).toBe('abc')
+  })
+
+  it.each(['private-line-1\nprivate-line-2', 'quoted-"token"', 'private\\key'])('redacts plain and JSON-escaped values: %j', (secret) => {
+    expect(JSON.parse(redact(JSON.stringify({ echo: secret }), [secret]))).toEqual({ echo: '***' })
+    expect(redact(`plain=${secret};json=${jsonStringEscape(secret)}`, [secret])).toBe('plain=***;json=***')
+  })
+
+  it('redacts overlapping secrets before their shorter prefixes', () => {
+    expect(redact('long-api-key and long', ['long', 'long-api-key'])).toBe('*** and ***')
   })
 })
 

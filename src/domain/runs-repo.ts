@@ -152,18 +152,23 @@ export async function getRun(db: D1Database, id: string): Promise<Run | null> {
   return row ? rowToRun(row) : null
 }
 
-/** Newest first; `before` is a `createdAt` cursor from the previous page. */
+export interface RunCursor {
+  createdAt: number
+  id: string
+}
+
+/** The run ID breaks timestamp ties, keeping every row reachable across pages. */
 export async function listRuns(
   db: D1Database,
   taskId: string,
-  opts: { limit: number; before?: number },
+  opts: { limit: number; before?: RunCursor },
 ): Promise<Run[]> {
   const { results } = await db
     .prepare(
-      `SELECT * FROM runs WHERE task_id = ? AND created_at < ?
-       ORDER BY created_at DESC LIMIT ?`,
+      `SELECT * FROM runs WHERE task_id = ?${opts.before ? ' AND (created_at, id) < (?, ?)' : ''}
+       ORDER BY created_at DESC, id DESC LIMIT ?`,
     )
-    .bind(taskId, opts.before ?? Number.MAX_SAFE_INTEGER, opts.limit)
+    .bind(...(opts.before ? [taskId, opts.before.createdAt, opts.before.id, opts.limit] : [taskId, opts.limit]))
     .all<RunRow>()
   return results.map(rowToRun)
 }

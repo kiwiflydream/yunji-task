@@ -60,9 +60,10 @@ export const api = {
   setEnabled: (id: string, enabled: boolean) =>
     request<{ task: TaskView }>(`/tasks/${id}/${enabled ? 'enable' : 'disable'}`, json('POST')).then((r) => r.task),
   trigger: (id: string) => request<{ runId: string }>(`/tasks/${id}/trigger`, json('POST')).then((r) => r.runId),
-  runs: (id: string, before?: number) =>
-    request<{ runs: Run[]; nextBefore: number | null }>(
-      `/tasks/${id}/runs?limit=50${before ? `&before=${before}` : ''}`,
+  run: (id: string) => request<{ run: Run }>(`/runs/${id}`).then((r) => r.run),
+  runs: (id: string, before?: string) =>
+    request<{ runs: Run[]; nextBefore: string | null }>(
+      `/tasks/${id}/runs?limit=50${before ? `&before=${encodeURIComponent(before)}` : ''}`,
     ),
   statsOverview: (range: StatsRange) =>
     request<StatsOverview>(`/stats/overview?range=${range}&tz=${encodeURIComponent(viewerTimezone)}`),

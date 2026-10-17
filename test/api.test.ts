@@ -163,11 +163,31 @@ describe('tasks API', () => {
     for (let i = 1; i <= 3; i++) await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: i, reason: `r${i}` }, i)
     const page1 = (await (await call(`/tasks/${task.id}/runs?limit=2`)).json()) as any
     expect(page1.runs.map((r: any) => r.error)).toEqual(['r3', 'r2'])
-    expect(page1.nextBefore).toBe(2)
-    const page2 = (await (await call(`/tasks/${task.id}/runs?limit=2&before=2`)).json()) as any
+    expect(page1.nextBefore).toBe(`2:${page1.runs[1].id}`)
+    const page2 = (await (await call(`/tasks/${task.id}/runs?limit=2&before=${encodeURIComponent(page1.nextBefore)}`)).json()) as any
     expect(page2.runs.map((r: any) => r.error)).toEqual(['r1'])
     expect(page2.nextBefore).toBeNull()
     expect((await call(`/runs/${page2.runs[0].id}`)).status).toBe(200)
+  })
+
+  it('pages through timestamp ties without duplicates or omissions', async () => {
+    const task = await create()
+    const now = Date.now()
+    for (const offset of [1, 0, 0, 0, -1]) {
+      await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: now + offset, reason: 'tie' }, now + offset)
+    }
+    const ids: string[] = []
+    let cursor: string | null = null
+    do {
+      const page = await (await call(`/tasks/${task.id}/runs?limit=2${cursor ? `&before=${encodeURIComponent(cursor)}` : ''}`)).json() as any
+      ids.push(...page.runs.map((run: { id: string }) => run.id))
+      cursor = page.nextBefore
+    } while (cursor)
+    expect(ids).toHaveLength(5)
+    expect(new Set(ids).size).toBe(5)
+    for (const invalid of ['123', `NaN:${ids[0]}`, `9007199254740992:${ids[0]}`, '123:not-an-id']) {
+      expect((await call(`/tasks/${task.id}/runs?before=${encodeURIComponent(invalid)}`)).status).toBe(422)
+    }
   })
 })
 

@@ -46,6 +46,37 @@ const message = (taskId: string, overrides: Partial<RunMessage> = {}): RunMessag
 })
 
 describe('processRun', () => {
+  it('renders an accepted __proto__ variable and redacts its echoed value', async () => {
+    const secret = 'prototype-variable-value'
+    await upsertVariable(env.DB, env.ENCRYPTION_KEY, { name: '__proto__', value: secret, description: '' }, Date.now())
+    const task = await createTaskRow({
+      schedule: { type: 'manual' }, alert: { mode: 'off' },
+      executor: { type: 'http', config: { url: 'https://downstream.test', method: 'POST', body: '{{__proto__}}' } },
+    })
+    const calls = mockFetch(() => Response.json({ echo: secret }))
+    const msg = message(task.id)
+    await processRun(msg, envWithQueue().env)
+    expect(await calls[0].text()).toBe(secret)
+    expect(JSON.parse((await getRun(env.DB, msg.runId))!.responseBody!)).toEqual({ echo: '***' })
+  })
+
+  it('never persists a JSON-escaped variable echoed by the downstream', async () => {
+    const secret = 'private-line-1\nprivate-"line-2"\\end'
+    await upsertVariable(env.DB, env.ENCRYPTION_KEY, { name: 'MULTILINE', value: secret, description: '' }, Date.now())
+    const task = await createTaskRow({
+      schedule: { type: 'manual' },
+      executor: { type: 'http', config: { url: 'https://downstream.test', method: 'POST', body: '{{MULTILINE}}' } },
+      alert: { mode: 'off' },
+    })
+    const calls = mockFetch(() => Response.json({ echo: secret }))
+    const msg = message(task.id)
+    await processRun(msg, envWithQueue().env)
+    expect(await calls[0].text()).toBe(secret)
+    const run = await getRun(env.DB, msg.runId)
+    expect(run?.status).toBe('success')
+    expect(JSON.parse(run!.responseBody!)).toEqual({ echo: '***' })
+  })
+
   it('retries a 200 response when its JSON business result fails, then records success', async () => {
     const task = await createTaskRow({
       retry: { count: 1, intervalSeconds: 7 }, alert: { mode: 'off' },

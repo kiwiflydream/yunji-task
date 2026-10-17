@@ -40,12 +40,12 @@ export async function deleteVariable(db: D1Database, name: string): Promise<bool
 
 /** Decrypt the named variables. Names that do not exist are simply absent from the result. */
 export async function resolveVariables(db: D1Database, key: string, names: string[]): Promise<Record<string, string>> {
-  if (names.length === 0) return {}
+  const out: Record<string, string> = Object.create(null)
+  if (names.length === 0) return out
   const { results } = await db
     .prepare(`SELECT name, value_encrypted FROM variables WHERE name IN (${names.map(() => '?').join(', ')})`)
     .bind(...names)
     .all<{ name: string; value_encrypted: string }>()
-  const out: Record<string, string> = {}
   for (const r of results) out[r.name] = await decryptString(key, r.value_encrypted, r.name)
   return out
 }

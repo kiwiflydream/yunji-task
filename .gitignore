@@ -23,6 +23,8 @@ node_modules/
 # logs
 logs/
 *.log
+test-results/
+playwright-report/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

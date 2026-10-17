@@ -27,10 +27,13 @@ pnpm dev                          # Vite + Worker：http://localhost:5173/admin�
 
 ```sh
 pnpm test        # vitest，在 workerd 中运行（@cloudflare/vitest-plugin）
+pnpm test:e2e    # 构建后运行浏览器回归测试，使用独立静态服务与模拟 API，不读写本地 D1
 pnpm typecheck   # Worker、前端、测试三套 tsconfig
 pnpm build       # 产物在 dist/（client 静态资源 + Worker）
 pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.ts
 ```
+
+首次运行浏览器测试前执行 `pnpm exec playwright install chromium`；本机已有 Chrome 时，也可直接运行 `E2E_BROWSER_CHANNEL=chrome pnpm test:e2e`。测试默认使用端口 6176，可通过 `E2E_PORT` 调整。
 
 ## 部署
 
@@ -236,7 +239,7 @@ Paid 套餐每月 $5 起，额度按月计算，超出后按量计费。执行�
 | GET / POST | `/api/tasks` | 列表 / 创建 |
 | GET / PUT / DELETE | `/api/tasks/:id` | 查看 / 全量更新 / 删除 |
 | POST | `/api/tasks/:id/enable` · `/disable` · `/trigger` | 启用 / 停用 / 手动触发 |
-| GET | `/api/tasks/:id/runs?limit=50&before=<createdAt>` | 执行记录（分页） |
+| GET | `/api/tasks/:id/runs?limit=50&before=<nextBefore>` | 执行记录（分页；将上页返回的 `nextBefore` URL 编码后原样传回，包含时间戳与 ID） |
 | GET | `/api/runs/:id` | 单次执行 |
 | GET · PUT · DELETE | `/api/variables` · `/api/variables/:name` | 加密变量（值不返回） |
 | GET · PUT | `/api/settings/alert` | 全局告警 |

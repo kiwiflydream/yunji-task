@@ -30,7 +30,7 @@ export function renderTemplate(
 ): string {
   const missing = new Set<string>()
   const out = input.replace(VARIABLE_RE, (_, key: string) => {
-    if (!(key in values)) {
+    if (!Object.hasOwn(values, key)) {
       missing.add(key)
       return ''
     }
@@ -45,11 +45,12 @@ export function jsonStringEscape(value: string): string {
   return JSON.stringify(value).slice(1, -1)
 }
 
-/** Replace every occurrence of the given secrets with `***`. */
+/** Redact plain and JSON-escaped values, longest first so prefixes cannot leave secret suffixes. */
 export function redact(text: string, secrets: string[]): string {
+  const patterns = [...new Set(secrets.filter((secret) => secret.length >= 4)
+    .flatMap((secret) => [secret, jsonStringEscape(secret)]))]
+    .sort((a, b) => b.length - a.length)
   let out = text
-  for (const secret of secrets) {
-    if (secret.length >= 4) out = out.split(secret).join('***')
-  }
+  for (const pattern of patterns) out = out.split(pattern).join('***')
   return out
 }

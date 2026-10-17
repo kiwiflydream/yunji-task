@@ -22,7 +22,10 @@ const variableBodySchema = z.object({
 
 const runsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
-  before: z.coerce.number().int().positive().optional(),
+  before: z.string().max(128).transform((value) => {
+    const separator = value.indexOf(':')
+    return { createdAt: Number(value.slice(0, separator)), id: value.slice(separator + 1) }
+  }).pipe(z.object({ createdAt: z.number().int().positive(), id: z.uuid() })).optional(),
 })
 
 const statsQuerySchema = z.object({
@@ -127,7 +130,8 @@ apiRoutes.get('/tasks/:id/runs', async (c) => {
   const q = runsQuerySchema.safeParse(c.req.query())
   if (!q.success) throw new ValidationError(zodIssues(q.error))
   const runs = await listRuns(c.env.DB, c.req.param('id'), q.data)
-  const nextBefore = runs.length === q.data.limit ? runs[runs.length - 1].createdAt : null
+  const last = runs.at(-1)
+  const nextBefore = runs.length === q.data.limit && last ? `${last.createdAt}:${last.id}` : null
   return c.json({ runs, nextBefore })
 })
 

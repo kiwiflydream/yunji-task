@@ -184,7 +184,7 @@ function RunsCard({ taskId }: { taskId: string }) {
   const runs = useInfiniteQuery({
     queryKey: ['runs', taskId],
     queryFn: ({ pageParam }) => api.runs(taskId, pageParam),
-    initialPageParam: undefined as number | undefined,
+    initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.nextBefore ?? undefined,
     refetchInterval: 5_000,
   })

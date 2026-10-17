@@ -19,9 +19,12 @@ const queryClient = new QueryClient({
 })
 
 /** Route Kumo links through wouter; hrefs are relative to the /admin base. */
-const AppLink = forwardRef<HTMLAnchorElement, LinkComponentProps>(({ href = '', to: _to, ...rest }, ref) =>
-  href.startsWith('/') ? <RouterLink ref={ref} href={href} {...rest} /> : <a ref={ref} href={href} {...rest} />,
-)
+const AppLink = forwardRef<HTMLAnchorElement, LinkComponentProps>(({ href, to, ...rest }, ref) => {
+  const target = href ?? to ?? ''
+  return target.startsWith('/') && !target.startsWith('//')
+    ? <RouterLink ref={ref} href={target} {...rest} />
+    : <a ref={ref} href={target} {...rest} />
+})
 
 function useSystemColorMode() {
   useEffect(() => {
