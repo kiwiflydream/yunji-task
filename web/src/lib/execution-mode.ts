@@ -60,7 +60,7 @@ export function suggestionText(p95: number | null, timeoutMs: number, queueAvail
     return (
       typical +
       `超时在 ${WORKER_MAX_TIMEOUT_SECONDS} 秒以内，建议「${MODE_LABEL.worker}」：等待由普通 Worker 承担、不按时长计费，` +
-      `每百万次约 $${WORKER_COST_PER_MILLION}，Paid 和 Free 套餐下都最便宜。${FREE_ALLOWANCE_NOTE}`
+      `每百万次约 $${WORKER_COST_PER_MILLION}，适合 Paid 和 Free 的短任务。${FREE_ALLOWANCE_NOTE}`
     )
   }
   const noWorker = `超时超过 ${WORKER_MAX_TIMEOUT_SECONDS} 秒，不能用「${MODE_LABEL.worker}」。`

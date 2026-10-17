@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { taskInputSchema } from '../src/domain/task'
 import { emptyTaskForm, formToPayload, mapIssues, taskToForm, type TaskFormState } from '../web/src/lib/task-form'
 import { createTaskRow } from './helpers'
+import { newSuccessRule } from '../web/src/lib/success-rules'
+import type { SuccessCondition, SuccessRule } from '../src/executor/success-condition'
 
 const form = (overrides: Partial<TaskFormState> = {}): TaskFormState => ({
   ...emptyTaskForm,
@@ -17,6 +19,32 @@ function payloadOf(f: TaskFormState) {
 }
 
 describe('task form mapping', () => {
+  it('round-trips advanced rules and their JSON scalar types', async () => {
+    const successCondition: SuccessCondition = {
+      match: 'any' as const,
+      rules: [
+        { type: 'status', operator: 'between', value: 200, valueTo: 299 },
+        ...[0, '0', true, false, null].map((value): SuccessRule => ({ type: 'json', path: 'data.value', operator: 'eq', value })),
+        { type: 'json', path: 'data.optional', operator: 'not_exists' },
+        { type: 'body', operator: 'not_contains', value: 'error' },
+      ],
+    }
+    const task = await createTaskRow({ executor: { type: 'http', config: { url: 'https://d.test', successCondition } } })
+    const editable = taskToForm(task)
+    expect(editable.successMode).toBe('advanced')
+    const payload = taskInputSchema.parse(payloadOf(editable))
+    expect(payload.executor.config.successCondition).toEqual(successCondition)
+    expect(payloadOf({ ...editable, successMode: 'simple', successKeyword: 'ok' }).executor.config).toMatchObject({ successKeyword: 'ok' })
+    expect(payloadOf({ ...editable, successMode: 'simple' }).executor.config.successCondition).toBeUndefined()
+  })
+
+  it('rejects blank numeric comparisons before they can serialize as null', () => {
+    const result = formToPayload(form({ successMode: 'advanced', successRules: [{ ...newSuccessRule(), value: '' }] }))
+    expect(result).toHaveProperty('issues')
+    if ('issues' in result) expect(mapIssues(result.issues).fields.successRules).toContain('第 1 条条件')
+    expect(formToPayload(form({ successMode: 'simple', successRules: [{ ...newSuccessRule(), value: '' }] }))).toHaveProperty('payload')
+  })
+
   it('produces a payload the server schema accepts, with unit conversion', () => {
     const p = payloadOf(
       form({

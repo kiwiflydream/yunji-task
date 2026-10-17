@@ -43,10 +43,17 @@ export interface SchedulerStatus {
 }
 
 export interface AlertSettings {
+  mode: 'webhook' | 'sender' | 'off'
   url: string
   bodyTemplate: string
   senderTopic: string
 }
+
+export const BARK_ALERT_TEMPLATE = JSON.stringify({
+  title: 'cf-task: {{task.name}}',
+  body: '{{run.error}}\nHTTP {{run.http_status}} | #{{run.attempt}} | {{run.finished_at}}',
+  group: 'cf-task',
+}, null, 2)
 
 export interface Issue {
   path: string

@@ -3,7 +3,7 @@ import { getAlertSettings } from '../domain/settings'
 import type { Task } from '../domain/task'
 import { resolveVariables } from '../domain/variables'
 import { jsonStringEscape, redact, referencedVariables, renderTemplate } from '../lib/template'
-import { hasSender, senderService } from './sender'
+import { senderService } from './sender'
 
 export interface FailedRun {
   id: string
@@ -22,21 +22,17 @@ export type AlertTarget =
   | { kind: 'webhook'; url: string; bodyTemplate: string }
   | { kind: 'sender'; topic: string }
 
-/**
- * Resolve the effective alert target: the task override, else the global
- * default. Globally, a cf-sender topic wins over the webhook while the SENDER
- * binding exists; without the binding the webhook (if any) is the fallback.
- */
+/** Resolve the task override, else the explicitly selected global target. */
 export async function resolveAlertTarget(
   db: D1Database,
   task: AlertTask,
-  senderAvailable: boolean,
 ): Promise<AlertTarget | null> {
   if (task.alert.mode === 'off') return null
   if (task.alert.mode === 'custom') return { kind: 'webhook', url: task.alert.url, bodyTemplate: task.alert.bodyTemplate }
   if (task.alert.mode === 'sender') return { kind: 'sender', topic: task.alert.topic }
   const global = await getAlertSettings(db)
-  if (global.senderTopic && (senderAvailable || !global.url)) return { kind: 'sender', topic: global.senderTopic }
+  if (global.mode === 'off') return null
+  if (global.mode === 'sender') return { kind: 'sender', topic: global.senderTopic }
   return global.url ? { kind: 'webhook', url: global.url, bodyTemplate: global.bodyTemplate } : null
 }
 
@@ -86,7 +82,7 @@ export function senderAlertMessage(task: AlertTask, run: FailedRun) {
 
 /** Called only from the independent action worker; failures are retried from the durable outbox. */
 export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask, run: FailedRun): Promise<void> {
-  const target = await resolveAlertTarget(env.DB, task, hasSender(env))
+  const target = await resolveAlertTarget(env.DB, task)
   if (!target) return
   if (target.kind === 'sender') {
     const sender = senderService(env)

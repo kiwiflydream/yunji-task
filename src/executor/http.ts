@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { renderTemplate } from '../lib/template'
 import type { ExecutionResult, Executor } from './types'
+import { evaluateSuccessCondition, successConditionSchema } from './success-condition'
 
 export const RESPONSE_BODY_LIMIT = 4 * 1024
 const KEYWORD_SCAN_LIMIT = 1024 * 1024
@@ -20,13 +21,14 @@ export const httpConfigSchema = z.object({
   // Default fits worker mode (WORKER_MAX_TIMEOUT_MS).
   timeoutMs: z.number().int().min(1000).max(300_000).default(25_000),
   successKeyword: z.string().max(200).default(''),
+  successCondition: successConditionSchema.optional(),
 })
 
 export type HttpConfig = z.output<typeof httpConfigSchema>
 
 /** Read at most `limit` bytes of the body as text, then cancel the rest. */
-async function readLimited(res: Response, limit: number): Promise<string> {
-  if (!res.body) return ''
+async function readLimited(res: Response, limit: number): Promise<{ text: string; bytes: number }> {
+  if (!res.body) return { text: '', bytes: 0 }
   const reader = res.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
@@ -46,7 +48,7 @@ async function readLimited(res: Response, limit: number): Promise<string> {
     offset += part.length
     if (offset >= buf.length) break
   }
-  return new TextDecoder().decode(buf)
+  return { text: new TextDecoder().decode(buf), bytes: buf.length }
 }
 
 export function truncate(text: string, limit = RESPONSE_BODY_LIMIT): string {
@@ -90,10 +92,14 @@ export const httpExecutor: Executor<HttpConfig> = {
     }
 
     let text: string
+    let bodyTooLarge = false
     try {
       // One extra byte distinguishes an exact 4 KB response from a truncated one.
-      const limit = res.ok && config.successKeyword ? KEYWORD_SCAN_LIMIT : RESPONSE_BODY_LIMIT + 1
-      text = await readLimited(res, limit)
+      const inspectBody = config.successCondition?.rules.some((rule) => rule.type !== 'status')
+      const limit = inspectBody ? KEYWORD_SCAN_LIMIT + 1 : !config.successCondition && res.ok && config.successKeyword ? KEYWORD_SCAN_LIMIT : RESPONSE_BODY_LIMIT + 1
+      const response = await readLimited(res, limit)
+      text = response.text
+      bodyTooLarge = response.bytes > KEYWORD_SCAN_LIMIT
     } catch (err) {
       return {
         ok: false,
@@ -105,7 +111,8 @@ export const httpExecutor: Executor<HttpConfig> = {
     }
 
     let error: string | null = null
-    if (!res.ok) error = `HTTP ${res.status}`
+    if (config.successCondition) error = evaluateSuccessCondition(config.successCondition, res.status, text, bodyTooLarge)
+    else if (!res.ok) error = `HTTP ${res.status}`
     else if (config.successKeyword && !text.includes(config.successKeyword)) {
       error = `response does not contain success keyword "${config.successKeyword}"`
     }

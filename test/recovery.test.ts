@@ -99,7 +99,7 @@ it.each(['worker', 'direct'] as const)('restores a %s retry to its original tran
 })
 
 it('maintenance recovers a lost alert wake and preserves the failure-time target', async () => {
-  await putAlertSettings(env.DB, { url: 'https://alerts.test/original', bodyTemplate: '', senderTopic: '' }, Date.now())
+  await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/original', bodyTemplate: '', senderTopic: '' }, Date.now())
   const calls: string[] = []
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
     const url = String(input)
@@ -111,7 +111,7 @@ it('maintenance recovers a lost alert wake and preserves the failure-time target
   const broken = Object.create(env, { TASK_SCHEDULER: { value: { getByName: () => ({ scheduleAction: async () => { throw new Error('wake unavailable') } }) } } }) as CloudflareBindings
   await expect(processRun(msg, broken)).rejects.toThrow('wake unavailable')
   expect((await getRun(env.DB, msg.runId))?.status).toBe('failed')
-  await putAlertSettings(env.DB, { url: 'https://alerts.test/changed', bodyTemplate: '', senderTopic: '' }, Date.now())
+  await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/changed', bodyTemplate: '', senderTopic: '' }, Date.now())
   await runMaintenance(env)
   await runDurableObjectAlarm(env.TASK_SCHEDULER.getByName(task.id))
   await vi.waitFor(() => expect(calls).toContain('https://alerts.test/original'))

@@ -38,6 +38,25 @@ describe('auth', () => {
 })
 
 describe('tasks API', () => {
+  it('persists advanced conditions, validates rule paths and allows switching back to simple mode', async () => {
+    const condition = { match: 'all', rules: [
+      { type: 'status', operator: 'between', value: 200, valueTo: 299 },
+      { type: 'json', path: 'data.code', operator: 'eq', value: 0 },
+    ] }
+    const input = cronTask({ schedule: { type: 'manual' }, executor: { type: 'http', config: { url: 'https://d.test', successCondition: condition } } })
+    const task = await create(input)
+    const read = await call(`/tasks/${task.id}`)
+    expect((await read.json() as any).task.executor.config.successCondition).toEqual(condition)
+    const bad = await call(`/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify({
+      ...input, executor: { type: 'http', config: { url: 'https://d.test', successCondition: { match: 'all', rules: [{ type: 'status', operator: 'between', value: 299, valueTo: 200 }] } } },
+    }) })
+    expect(bad.status).toBe(422)
+    expect((await bad.json() as any).issues).toContainEqual(expect.objectContaining({ path: 'executor.config.successCondition.rules.0.valueTo' }))
+    const updated = await call(`/tasks/${task.id}`, { method: 'PUT', body: JSON.stringify(cronTask({ schedule: { type: 'manual' } })) })
+    expect(updated.status).toBe(200)
+    expect((await updated.json() as any).task.executor.config.successCondition).toBeUndefined()
+  })
+
   it('creates a task with defaults and arms its scheduler', async () => {
     const task = await create()
     expect(task).toMatchObject({
@@ -178,14 +197,16 @@ describe('variables API', () => {
 
 describe('settings API', () => {
   it('reads and writes the global alert target', async () => {
-    expect(await (await call('/settings/alert')).json()).toEqual({ alert: { url: '', bodyTemplate: '', senderTopic: '' } })
+    const initial = await (await call('/settings/alert')).json() as { alert: { mode: string; url: string; bodyTemplate: string; senderTopic: string } }
+    expect(initial.alert).toMatchObject({ mode: 'webhook', url: '', senderTopic: '' })
+    expect(JSON.parse(initial.alert.bodyTemplate)).toMatchObject({ title: 'cf-task: {{task.name}}', group: 'cf-task' })
     const res = await call('/settings/alert', {
       method: 'PUT',
       body: JSON.stringify({ url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}' }),
     })
     expect(res.status).toBe(200)
     expect(await (await call('/settings/alert')).json()).toEqual({
-      alert: { url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderTopic: '' },
+      alert: { mode: 'webhook', url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderTopic: '' },
     })
   })
 })

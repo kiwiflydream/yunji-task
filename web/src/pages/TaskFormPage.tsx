@@ -22,6 +22,11 @@ import { isValidTimezone } from '../../../src/lib/time'
 import type { Issue } from '../../../src/shared/types'
 import { api, ApiError } from '../api'
 import { PageHeader } from '../components/PageHeader'
+import { CronEditor } from '../components/CronEditor'
+import { AlertTemplateHelp } from '../components/AlertTemplateHelp'
+import { ExecutionModeGuide } from '../components/ExecutionModeGuide'
+import { TimezoneSelect } from '../components/TimezoneSelect'
+import { SuccessConditionEditor } from '../components/SuccessConditionEditor'
 import { ErrorBanner, PageLoader } from '../components/States'
 import { MODE_LABEL, suggestionText, WORKER_MAX_TIMEOUT_SECONDS } from '../lib/execution-mode'
 import { fmtTime } from '../lib/format'
@@ -78,8 +83,8 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
   const [errors, setErrors] = useState<Partial<Record<FormField, string>>>({})
   const [otherIssues, setOtherIssues] = useState<Issue[]>([])
 
-  const set = <K extends FormField>(key: K, value: TaskFormState[K]) => {
-    setF((prev) => ({ ...prev, [key]: value }))
+  const set = <K extends FormField>(key: K, value: TaskFormState[K] | ((previous: TaskFormState[K]) => TaskFormState[K])) => {
+    setF((prev) => ({ ...prev, [key]: typeof value === 'function' ? value(prev[key]) : value }))
     if (errors[key]) setErrors((prev) => ({ ...prev, [key]: undefined }))
   }
 
@@ -160,12 +165,9 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           />
           {f.scheduleType === 'cron' && (
             <>
-              <Input
-                label="Cron 表达式"
-                className="font-mono"
+              <CronEditor
                 value={f.cron}
-                onChange={(e) => set('cron', e.target.value)}
-                description="6 段：秒 分 时 日 月 周。例：*/10 * * * * * 每 10 秒；0 30 9 * * 1-5 工作日 9:30"
+                onChange={(cron) => set('cron', cron)}
                 {...err('cron')}
               />
               <CronPreview cron={f.cron} timezone={f.timezone} hideError={!!errors.cron} />
@@ -182,11 +184,9 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
               {...err('runAt')}
             />
           )}
-          <Input
-            label="时区"
+          <TimezoneSelect
             value={f.timezone}
-            onChange={(e) => set('timezone', e.target.value)}
-            description="IANA 时区，例如 Asia/Shanghai、UTC"
+            onChange={(timezone) => set('timezone', timezone)}
             {...err('timezone')}
           />
         </Section>
@@ -234,14 +234,22 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
               description="1–300"
               {...err('timeoutSeconds')}
             />
-            <Input
-              label="成功关键字（可选）"
-              value={f.successKeyword}
-              onChange={(e) => set('successKeyword', e.target.value)}
-              description="2xx 且响应体包含该字符串才算成功"
-              {...err('successKeyword')}
-            />
           </div>
+        </Section>
+
+        <Section title="成功判定">
+          <Radio.Group legend="判定模式" orientation="horizontal" value={f.successMode}
+            onValueChange={(v) => {
+              set('successMode', v as TaskFormState['successMode'])
+              setErrors((previous) => ({ ...previous, successKeyword: undefined, successRules: undefined }))
+            }}>
+            <Radio.Item label="简单模式" value="simple" />
+            <Radio.Item label="高级模式" value="advanced" />
+          </Radio.Group>
+          {f.successMode === 'simple' ? <Input label="成功关键字（可选）" value={f.successKeyword}
+            onChange={(e) => set('successKeyword', e.target.value)} description="HTTP 2xx 即成功；填写后还需响应体包含该字符串。" {...err('successKeyword')} />
+            : <SuccessConditionEditor match={f.successMatch} rules={f.successRules} onMatchChange={(v) => set('successMatch', v)}
+              onRulesChange={(update) => set('successRules', update)} error={errors.successRules} />}
         </Section>
 
         <Section title="执行策略">
@@ -319,6 +327,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
                 className="font-mono"
                 value={f.alertUrl}
                 onChange={(e) => set('alertUrl', e.target.value)}
+                description="可用「变量」页创建的加密变量，例如 {{BARK_KEY}}；task.*、run.* 仅支持 Body 模板。"
                 {...err('alertUrl')}
               />
               <InputArea
@@ -327,9 +336,10 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
                 rows={4}
                 value={f.alertBodyTemplate}
                 onChange={(e) => set('alertBodyTemplate', e.target.value)}
-                description="留空则发送默认 JSON；可用占位符见「设置」页"
+                description="留空则发送通用事件 JSON；下方列出可用变量及其写法。"
                 {...err('alertBodyTemplate')}
               />
+              <AlertTemplateHelp />
             </>
           )}
         </Section>
@@ -374,38 +384,43 @@ function ExecutionModeField({
   const timeoutMs = Number.isFinite(timeout) && timeout > 0 ? timeout * 1000 : 25_000
   const workerFits = timeoutMs <= WORKER_MAX_TIMEOUT_SECONDS * 1000
   return (
-    <Radio.Group
-      legend="执行方式"
-      appearance="card"
-      orientation="horizontal"
-      value={value}
-      onValueChange={(v) => onChange(v as TaskFormState['executionMode'])}
-      error={error}
-      description={!taskId || stats.data ? suggestionText(p95, timeoutMs, queueAvailable) : undefined}
-    >
-      <Radio.Item
-        label="跟随全局"
-        value="inherit"
-        description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（设置页可修改）` : '可在设置页修改全局方式'}
-      />
-      <Radio.Item
-        label={MODE_LABEL.worker}
-        value="worker"
-        disabled={!workerFits && value !== 'worker'}
-        description={
-          workerFits
-            ? '交给 Worker 后台执行，等待不计费，通常最便宜'
-            : `需要把超时设在 ${WORKER_MAX_TIMEOUT_SECONDS} 秒以内`
-        }
-      />
-      <Radio.Item
-        label={MODE_LABEL.queue}
-        value="queue"
-        disabled={!queueAvailable && value !== 'queue'}
-        description={queueAvailable ? '经 Queue 投递执行，适合超时较长的慢接口' : '当前部署没有配置 Queue'}
-      />
-      <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，等待按时长计费" />
-    </Radio.Group>
+    <div className="flex flex-col gap-3">
+      <div>
+        <ExecutionModeGuide timeoutMs={timeoutMs} taskMode={value} globalMode={me.data?.executionMode} queueAvailable={me.data?.queueAvailable} />
+      </div>
+      <Radio.Group
+        legend="执行方式"
+        appearance="card"
+        orientation="horizontal"
+        value={value}
+        onValueChange={(v) => onChange(v as TaskFormState['executionMode'])}
+        error={error}
+        description={!taskId || stats.data ? suggestionText(p95, timeoutMs, queueAvailable) : undefined}
+      >
+        <Radio.Item
+          label="跟随全局"
+          value="inherit"
+          description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（设置页可修改）` : '可在设置页修改全局方式'}
+        />
+        <Radio.Item
+          label={MODE_LABEL.worker}
+          value="worker"
+          disabled={!workerFits && value !== 'worker'}
+          description={
+            workerFits
+              ? 'Worker 后台执行，等待不计运行时长，适合短任务'
+              : `需要把超时设在 ${WORKER_MAX_TIMEOUT_SECONDS} 秒以内`
+          }
+        />
+        <Radio.Item
+          label={MODE_LABEL.queue}
+          value="queue"
+          disabled={!queueAvailable && value !== 'queue'}
+          description={queueAvailable ? '经 Queue 投递执行，适合超时较长的慢接口' : '当前部署没有配置 Queue'}
+        />
+        <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，等待按时长计费" />
+      </Radio.Group>
+    </div>
   )
 }
 

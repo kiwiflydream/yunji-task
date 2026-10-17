@@ -1,6 +1,8 @@
 import type { Task, TaskInputRaw } from '../../../src/domain/task'
 import { DEFAULT_TIMEZONE, toDatetimeLocal, zonedTimeToEpoch } from '../../../src/lib/time'
 import type { Issue, TaskExecutionMode } from '../../../src/shared/types'
+import { successConditionSchema, type SuccessCondition } from '../../../src/executor/success-condition'
+import { newSuccessRule, successRuleToForm, successRuleToInput, type SuccessRuleForm } from './success-rules'
 
 export interface HeaderRow {
   key: string
@@ -25,6 +27,9 @@ export interface TaskFormState {
   body: string
   timeoutSeconds: string
   successKeyword: string
+  successMode: 'simple' | 'advanced'
+  successMatch: 'all' | 'any'
+  successRules: SuccessRuleForm[]
   overlapPolicy: 'skip' | 'parallel'
   retryCount: string
   retryIntervalSeconds: string
@@ -51,6 +56,9 @@ export const emptyTaskForm: TaskFormState = {
   body: '',
   timeoutSeconds: '25',
   successKeyword: '',
+  successMode: 'simple',
+  successMatch: 'all',
+  successRules: [newSuccessRule('status')],
   overlapPolicy: 'skip',
   retryCount: '0',
   retryIntervalSeconds: '10',
@@ -78,6 +86,9 @@ export function taskToForm(task: Task): TaskFormState {
     body: cfg.body,
     timeoutSeconds: String(cfg.timeoutMs / 1000),
     successKeyword: cfg.successKeyword,
+    successMode: cfg.successCondition ? 'advanced' : 'simple',
+    successMatch: cfg.successCondition?.match ?? 'all',
+    successRules: cfg.successCondition?.rules.map(successRuleToForm) ?? [newSuccessRule('status')],
     overlapPolicy: task.overlapPolicy,
     retryCount: String(task.retry.count),
     retryIntervalSeconds: String(task.retry.intervalSeconds),
@@ -116,6 +127,14 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
     else headers[key] = h.value
   })
 
+  let successCondition: SuccessCondition | undefined
+  if (f.successMode === 'advanced') {
+    // Validate before JSON serialization can turn an invalid numeric input (NaN) into null.
+    const parsed = successConditionSchema.safeParse({ match: f.successMatch, rules: f.successRules.map(successRuleToInput) })
+    if (parsed.success) successCondition = parsed.data
+    else issues.push(...parsed.error.issues.map((issue) => ({ path: `executor.config.successCondition.${issue.path.join('.')}`, message: issue.message })))
+  }
+
   if (issues.length) return { issues }
   return {
     payload: {
@@ -131,7 +150,8 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
           headers,
           body: f.body,
           timeoutMs: Math.round(num(f.timeoutSeconds) * 1000),
-          successKeyword: f.successKeyword,
+          successKeyword: f.successMode === 'simple' ? f.successKeyword : '',
+          ...(successCondition ? { successCondition } : {}),
         },
       },
       overlapPolicy: f.overlapPolicy,
@@ -159,6 +179,7 @@ const PATH_TO_FIELD: [prefix: string, field: FormField][] = [
   ['executor.config.body', 'body'],
   ['executor.config.timeoutMs', 'timeoutSeconds'],
   ['executor.config.successKeyword', 'successKeyword'],
+  ['executor.config.successCondition', 'successRules'],
   ['overlapPolicy', 'overlapPolicy'],
   ['retry.count', 'retryCount'],
   ['retry.intervalSeconds', 'retryIntervalSeconds'],
@@ -179,7 +200,10 @@ export function mapIssues(issues: Issue[]): { fields: Partial<Record<FormField, 
   const other: Issue[] = []
   for (const issue of issues) {
     const hit = PATH_TO_FIELD.find(([prefix]) => issue.path === prefix || issue.path.startsWith(prefix + '.'))
-    if (hit && !fields[hit[1]]) fields[hit[1]] = FIELD_MESSAGES[hit[1]] ?? issue.message
+    if (hit && !fields[hit[1]]) {
+      const ruleIndex = hit[1] === 'successRules' ? issue.path.match(/\.rules\.(\d+)(?:\.|$)/)?.[1] : undefined
+      fields[hit[1]] = FIELD_MESSAGES[hit[1]] ?? (ruleIndex === undefined ? issue.message : `第 ${Number(ruleIndex) + 1} 条条件：${issue.message}`)
+    }
     else if (!hit) other.push(issue)
   }
   return { fields, other }

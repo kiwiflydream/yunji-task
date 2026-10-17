@@ -184,7 +184,7 @@ describe('per-task execution mode: UI helpers', () => {
     expect(suggestMode(1000, LONG)).toBe('queue')
     expect(suggestionText(3420, SHORT, true)).toBe(
       '这个接口一般 3.42s 返回（近 7 天 P95）。超时在 25 秒以内，建议「Worker 异步」：等待由普通 Worker 承担、' +
-        '不按时长计费，每百万次约 $0.45，Paid 和 Free 套餐下都最便宜。执行量在免费额度内时都不花钱。',
+        '不按时长计费，每百万次约 $0.45，适合 Paid 和 Free 的短任务。执行量在免费额度内时都不花钱。',
     )
     expect(suggestionText(null, SHORT, true)).toMatch(/^超时在 25 秒以内，建议「Worker 异步」/)
     expect(suggestionText(3420, LONG, true)).toBe(

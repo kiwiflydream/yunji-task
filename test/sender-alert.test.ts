@@ -2,6 +2,7 @@ import { env } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
 import { putAlertSettings } from '../src/domain/settings'
+import type { AlertSettings } from '../src/shared/types'
 import { resolveAlertTarget, sendFailureAlert, senderAlertMessage, type FailedRun } from '../src/executor/alert'
 import { processRun } from '../src/executor/consumer'
 import type { SenderService } from '../src/executor/sender'
@@ -39,33 +40,38 @@ const run: FailedRun = {
   finishedAt: Date.UTC(2026, 9, 17, 1, 2, 3),
 }
 
-const settings = (s: { url?: string; senderTopic?: string }) =>
-  putAlertSettings(env.DB, { url: s.url ?? '', bodyTemplate: '', senderTopic: s.senderTopic ?? '' }, Date.now())
+const settings = (s: { mode: AlertSettings['mode']; url?: string; senderTopic?: string }) =>
+  putAlertSettings(env.DB, { mode: s.mode, url: s.url ?? '', bodyTemplate: '', senderTopic: s.senderTopic ?? '' }, Date.now())
 
 describe('resolveAlertTarget', () => {
   const task = (alert: any) => ({ id: 't', name: 'n', alert })
 
-  it('prefers the global cf-sender topic while the binding exists, else falls back to the webhook', async () => {
-    await settings({ url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }), true)).toEqual({ kind: 'sender', topic: 'ops-alert' })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }), false)).toMatchObject({
+  it('uses the selected global mode when both targets are saved', async () => {
+    await settings({ mode: 'webhook', url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }))).toMatchObject({
       kind: 'webhook',
       url: 'https://alerts.test/hook',
     })
+    await settings({ mode: 'sender', url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }))).toEqual({ kind: 'sender', topic: 'ops-alert' })
+    await settings({ mode: 'off', url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }))).toBeNull()
   })
 
   it('keeps a topic-only global target without the binding, so the failure is visible', async () => {
-    await settings({ senderTopic: 'ops-alert' })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'inherit' }), false)).toEqual({ kind: 'sender', topic: 'ops-alert' })
+    await settings({ mode: 'sender', senderTopic: 'ops-alert', url: 'https://alerts.test/hook' })
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    await expect(sendFailureAlert(env, task({ mode: 'inherit' }), run)).rejects.toThrow(/SENDER service binding/)
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 
   it('honors task overrides', async () => {
-    await settings({ senderTopic: 'ops-alert' })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'sender', topic: 'db' }), true)).toEqual({ kind: 'sender', topic: 'db' })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'custom', url: 'https://x.test', bodyTemplate: '' }), true)).toMatchObject({
+    await settings({ mode: 'off', senderTopic: 'ops-alert' })
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'sender', topic: 'db' }))).toEqual({ kind: 'sender', topic: 'db' })
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'custom', url: 'https://x.test', bodyTemplate: '' }))).toMatchObject({
       kind: 'webhook',
     })
-    expect(await resolveAlertTarget(env.DB, task({ mode: 'off' }), true)).toBeNull()
+    expect(await resolveAlertTarget(env.DB, task({ mode: 'off' }))).toBeNull()
   })
 })
 
@@ -106,7 +112,7 @@ describe('sendFailureAlert via cf-sender', () => {
 
 describe('failed runs', () => {
   it('persist the resolved cf-sender target in the alert action', async () => {
-    await settings({ url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
+    await settings({ mode: 'sender', url: 'https://alerts.test/hook', senderTopic: 'ops-alert' })
     const task = await createTaskRow()
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('boom', { status: 500 }))
     const sent: RunMessage[] = []
@@ -123,11 +129,30 @@ describe('validation and UI mapping', () => {
   const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
 
   it('validates topics in settings and task alerts', async () => {
-    const bad = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ senderTopic: 'Ops Alert' }) }, env)
+    const bad = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'sender', senderTopic: 'Ops Alert' }) }, env)
     expect(bad.status).toBe(422)
-    const ok = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ senderTopic: 'ops-alert' }) }, env)
-    expect(await ok.json()).toEqual({ alert: { url: '', bodyTemplate: '', senderTopic: 'ops-alert' } })
+    const missing = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'sender' }) }, env)
+    expect(missing.status).toBe(422)
+    const ok = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'sender', senderTopic: 'ops-alert' }) }, env)
+    expect(await ok.json()).toMatchObject({ alert: { mode: 'sender', url: '', senderTopic: 'ops-alert' } })
     expect(taskInputSchema.safeParse({ ...baseTask, alert: { mode: 'sender', topic: '' } }).success).toBe(false)
+  })
+
+  it('sends the default global webhook body as Bark JSON with escaped values', async () => {
+    await app.request('http://x/api/settings/alert', {
+      method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'webhook', url: 'https://api.day.app/test-key' }),
+    }, env)
+    let request: { url: string; method: string; contentType: string | null; body: unknown } | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const req = new Request(input, init)
+      request = { url: req.url, method: req.method, contentType: req.headers.get('content-type'), body: await req.json() }
+      return new Response('{"code":200}', { headers: { 'content-type': 'application/json' } })
+    })
+    await sendFailureAlert(env, { id: 't', name: '夜间"同步"', alert: { mode: 'inherit' } }, { ...run, error: 'bad "response"\nnext line' })
+    expect(request).toEqual({
+      url: 'https://api.day.app/test-key', method: 'POST', contentType: 'application/json',
+      body: { title: 'cf-task: 夜间"同步"', body: 'bad "response"\nnext line\nHTTP 502 | #2 | 2026-10-17T01:02:03.000Z', group: 'cf-task' },
+    })
   })
 
   it('round-trips the sender mode through the task form', async () => {

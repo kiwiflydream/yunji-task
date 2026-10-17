@@ -152,9 +152,26 @@ pnpm deploy                             # 构建、执行 D1 迁移并发布 Wor
 
 最终失败告警也先持久化，再由独立 Worker 发送，不占用任务请求的 25 秒上限所在的后台执行窗口。告警目标和模板取失败时的配置；单次发送最多 10 秒，失败后间隔 30、60 秒重试，最多发送 3 次。中断后的投递由每 5 分钟的维护任务恢复。投递采用至少一次语义：发送成功但确认写入前中断时，可能重复，接收端可按 `run.id` 去重。
 
-**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置」填全局 cf-sender 主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `cf-task:alert:<run.id>` 幂等键，重试不会重复发送。全局同时填了主题和 webhook 时优先主题；没有绑定时退回 webhook。
+**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置 → 全局失败告警」选择「CF Sender」并填写主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `cf-task:alert:<run.id>` 幂等键，重试不会重复发送。全局告警方式可明确选择 Webhook、CF Sender 或关闭，按所选方式发送；缺少 SENDER 绑定时会明确失败。Webhook 默认提供 [Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md) JSON 模板，推送地址可填写 `https://api.day.app/{{BARK_KEY}}`，并在「变量」中保存 `BARK_KEY`。
 
-响应体无成功关键字校验时只读取日志需要的前 4KB（另读 1 字节判断是否截断）；需要校验关键字时仍扫描前 1MB。
+**成功判定**：创建或编辑任务时，可以选择简单模式或高级模式。简单模式要求 HTTP 2xx，填写成功关键字后还需响应体包含该字符串。高级模式支持响应码等于／不等于／范围、响应正文等于／包含，以及 JSON 字段的等于、包含、大小比较、存在性判断；多个条件可选「全部满足（AND）」或「任一满足（OR）」。高级模式只按所配置的条件判断，若需要限定 2xx，请保留默认的响应码 200–299 条件。
+
+例如接口返回 `{"code":0,"data":{"status":"done"}}`，可以配置「响应码 200–299」且「JSON 字段 `code` 等于数字 `0`」且「JSON 字段 `data.status` 等于字符串 `done`」。路径也支持 `data.items[0].id` 和根节点 `$`；数字 `0` 与字符串 `"0"` 不相等。包含比较区分大小写，支持字符串子串或 JSON 数组中的单个标量值。字段缺失时只有「不存在」成立；`null` 视为字段存在。
+
+API 中的高级条件放在 `executor.config.successCondition`（最多 20 条），不设置该字段即为简单模式。例如：
+
+```json
+{
+  "match": "all",
+  "rules": [
+    { "type": "status", "operator": "between", "value": 200, "valueTo": 299 },
+    { "type": "json", "path": "code", "operator": "eq", "value": 0 },
+    { "type": "json", "path": "data.status", "operator": "eq", "value": "done" }
+  ]
+}
+```
+
+没有正文校验时只读取日志需要的前 4 KiB（另读 1 字节判断是否截断）；简单模式的成功关键字扫描前 1 MiB。高级模式的正文／JSON 条件要求完整响应不超过 1 MiB，超出大小、JSON 无法解析或条件未命中时，该条条件不成立，失败记录会显示具体原因。响应日志仍最多保存 4 KiB。
 
 编辑页会根据任务的超时和近 7 天的 P95 耗时给出建议，并估算每百万次的费用。只给建议，不会自动切换。
 

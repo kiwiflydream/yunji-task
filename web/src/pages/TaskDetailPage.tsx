@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { Run } from '../../../src/shared/types'
+import { describeSuccessRule } from '../../../src/executor/success-condition'
 import { api, ApiError, type TaskView } from '../api'
 import { EnabledBadge, RunStatusBadge } from '../components/badges'
 import { DescriptionList } from '../components/DescriptionList'
@@ -161,7 +162,10 @@ function RequestCard({ task }: { task: TaskView }) {
           ],
           ['Body', cfg.body ? <Text variant="mono">{cfg.body.length > 200 ? cfg.body.slice(0, 200) + '…' : cfg.body}</Text> : '—'],
           ['超时', `${cfg.timeoutMs / 1000} 秒`],
-          ['成功关键字', cfg.successKeyword ? <Text variant="mono">{cfg.successKeyword}</Text> : '— （2xx 即成功）'],
+          ['成功判定', cfg.successCondition ? <div className="flex min-w-0 flex-col gap-1 break-all">
+            <Text>高级模式 · {cfg.successCondition.match === 'all' ? '全部满足（AND）' : '任一满足（OR）'}</Text>
+            {cfg.successCondition.rules.map((rule, index) => <Text key={index} variant="mono">{index + 1}. {describeSuccessRule(rule)}</Text>)}
+          </div> : cfg.successKeyword ? <Text variant="mono">HTTP 2xx 且响应体包含 {JSON.stringify(cfg.successKeyword)}</Text> : '简单模式 · HTTP 2xx 即成功'],
         ]}
       />
     </Card>

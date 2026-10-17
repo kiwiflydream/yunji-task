@@ -46,6 +46,25 @@ const message = (taskId: string, overrides: Partial<RunMessage> = {}): RunMessag
 })
 
 describe('processRun', () => {
+  it('retries a 200 response when its JSON business result fails, then records success', async () => {
+    const task = await createTaskRow({
+      retry: { count: 1, intervalSeconds: 7 }, alert: { mode: 'off' },
+      executor: { type: 'http', config: { url: 'https://downstream.test', successCondition: { match: 'all', rules: [
+        { type: 'status', operator: 'between', value: 200, valueTo: 299 },
+        { type: 'json', path: 'code', operator: 'eq', value: 0 },
+      ] } } },
+    })
+    let attempts = 0
+    mockFetch(() => new Response(JSON.stringify({ code: ++attempts === 1 ? 1 : 0 })))
+    const { env: e, sent } = envWithQueue()
+    const msg = message(task.id)
+    await processRun(msg, e)
+    expect(await getRun(env.DB, msg.runId)).toMatchObject({ status: 'retrying', httpStatus: 200, error: expect.stringContaining('第 2 条') })
+    expect(sent).toEqual([{ body: { ...msg, attempt: 2 }, options: { delaySeconds: 7 } }])
+    await processRun(sent[0].body, e)
+    expect(await getRun(env.DB, msg.runId)).toMatchObject({ status: 'success', attempt: 2, httpStatus: 200, error: null })
+  })
+
   it('records success, renders variables and releases the scheduler slot', async () => {
     await upsertVariable(env.DB, env.ENCRYPTION_KEY, { name: 'TOKEN', value: 's3cr3t-token', description: '' }, Date.now())
     const task = await createTaskRow({
@@ -114,7 +133,7 @@ describe('processRun', () => {
   it('after the last attempt fails, marks failed and sends the templated alert', async () => {
     await putAlertSettings(
       env.DB,
-      { url: 'https://alerts.test/hook', bodyTemplate: '{"text":"{{task.name}} #{{run.attempt}}: {{run.error}}"}', senderTopic: '' },
+      { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '{"text":"{{task.name}} #{{run.attempt}}: {{run.error}}"}', senderTopic: '' },
       Date.now(),
     )
     const task = await createTaskRow({ name: 'nightly "sync"', retry: { count: 1, intervalSeconds: 1 } })
@@ -137,7 +156,7 @@ describe('processRun', () => {
   })
 
   it('task alert "off" suppresses the global alert', async () => {
-    await putAlertSettings(env.DB, { url: 'https://alerts.test/hook', bodyTemplate: '', senderTopic: '' }, Date.now())
+    await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '', senderTopic: '' }, Date.now())
     const task = await createTaskRow({ alert: { mode: 'off' } })
     const calls = mockFetch(() => new Response('', { status: 500 }))
     await processRun(message(task.id), envWithQueue().env)
