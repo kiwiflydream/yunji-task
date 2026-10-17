@@ -1,3 +1,5 @@
+import { localizeIssueMessage } from '../locale'
+import { tr, useLocale } from '../i18n'
 import {
   Banner,
   Button,
@@ -75,6 +77,8 @@ function Section({ title, description, children }: { title: string; description?
 }
 
 function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormState; taskName?: string }) {
+  useLocale()
+
   const [, navigate] = useLocation()
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
@@ -103,7 +107,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
     onSuccess: (task) => {
       qc.invalidateQueries({ queryKey: ['tasks'] })
       qc.setQueryData(['task', task.id], task)
-      toasts.add({ title: id ? '已保存' : '任务已创建', variant: 'success' })
+      toasts.add({ title: id ? tr("已保存") : tr("任务已创建"), variant: 'success' })
       navigate(`/tasks/${task.id}`)
     },
     onError: (err) => {
@@ -112,17 +116,17 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
     },
   })
 
-  const err = (key: FormField) => (errors[key] ? { error: errors[key] } : {})
+  const err = (key: FormField) => (errors[key] ? { error: localizeIssueMessage(errors[key]) } : {})
   const hasErrors = Object.values(errors).some(Boolean) || otherIssues.length > 0
 
   return (
     <>
       <PageHeader
         crumbs={[
-          { label: '任务', href: '/' },
-          ...(id ? [{ label: taskName ?? '任务', href: `/tasks/${id}` }, { label: '编辑' }] : [{ label: '新建' }]),
+          { label: tr("任务"), href: '/' },
+          ...(id ? [{ label: taskName ?? tr("任务"), href: `/tasks/${id}` }, { label: tr("编辑") }] : [{ label: tr("新建") }]),
         ]}
-        title={id ? `编辑：${taskName}` : '新建任务'}
+        title={id ? tr("编辑：{0}", taskName) : tr("新建任务")}
       />
       <form
         className="flex flex-col gap-4"
@@ -136,31 +140,31 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           <Banner
             variant="error"
             icon={<WarningCircleIcon weight="fill" />}
-            title="保存失败，请检查标出的字段"
-            description={otherIssues.length ? otherIssues.map((i) => (i.path ? `${i.path}: ` : '') + i.message).join('；') : undefined}
+            title={tr("保存失败，请检查标出的字段")}
+            description={otherIssues.length ? otherIssues.map((i) => (i.path ? `${i.path}: ` : '') + localizeIssueMessage(i.message)).join('；') : undefined}
           />
         )}
 
-        <Section title="基本信息">
-          <Input label="名称" value={f.name} onChange={(e) => set('name', e.target.value)} {...err('name')} />
+        <Section title={tr("基本信息")}>
+          <Input label={tr("名称")} value={f.name} onChange={(e) => set('name', e.target.value)} {...err('name')} />
           <Input
-            label="描述（可选）"
+            label={tr("描述（可选）")}
             value={f.description}
             onChange={(e) => set('description', e.target.value)}
             {...err('description')}
           />
-          <Switch label="启用" checked={f.enabled} onCheckedChange={(v) => set('enabled', v)} />
+          <Switch label={tr("启用")} checked={f.enabled} onCheckedChange={(v) => set('enabled', v)} />
         </Section>
 
-        <Section title="调度">
+        <Section title={tr("调度")}>
           <Tabs
             variant="segmented"
             value={f.scheduleType}
             onValueChange={(v) => set('scheduleType', v as ScheduleKind)}
             tabs={[
-              { value: 'cron', label: 'Cron（秒级）' },
-              { value: 'once', label: '一次性' },
-              { value: 'manual', label: '仅手动 / API' },
+              { value: 'cron', label: tr("Cron（秒级）") },
+              { value: 'once', label: tr("一次性") },
+              { value: 'manual', label: tr("仅手动 / API") },
             ]}
           />
           {f.scheduleType === 'cron' && (
@@ -175,12 +179,12 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           )}
           {f.scheduleType === 'once' && (
             <Input
-              label="执行时间"
+              label={tr("执行时间")}
               type="datetime-local"
               step={1}
               value={f.runAt}
               onChange={(e) => set('runAt', e.target.value)}
-              description="按下面的时区解释"
+              description={tr("按下面的时区解释")}
               {...err('runAt')}
             />
           )}
@@ -191,10 +195,10 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           />
         </Section>
 
-        <Section title="HTTP 请求" description="URL、请求头和 Body 中可以用 {{变量名}} 引用加密变量。">
+        <Section title={tr("HTTP 请求")} description={tr("URL、请求头和 Body 中可以用 {{变量名}} 引用加密变量。")}>
           <div className="grid gap-4 sm:grid-cols-[9rem_1fr]">
             <Select
-              label="方法"
+              label={tr("方法")}
               value={f.method}
               onValueChange={(v) => set('method', String(v))}
             >
@@ -213,19 +217,19 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
               {...err('url')}
             />
           </div>
-          <HeadersEditor rows={f.headers} onChange={(rows) => set('headers', rows)} error={errors.headers} />
+          <HeadersEditor rows={f.headers} onChange={(rows) => set('headers', rows)} error={localizeIssueMessage(errors.headers)} />
           <InputArea
-            label="Body（可选）"
+            label={tr("Body（可选）")}
             className="font-mono"
             rows={4}
             value={f.body}
             onChange={(e) => set('body', e.target.value)}
-            description="GET / HEAD 请求不发送 Body"
+            description={tr("GET / HEAD 请求不发送 Body")}
             {...err('body')}
           />
           <div className="grid gap-4 sm:grid-cols-2">
             <Input
-              label="超时（秒）"
+              label={tr("超时（秒）")}
               type="number"
               min={1}
               max={300}
@@ -237,51 +241,51 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           </div>
         </Section>
 
-        <Section title="成功判定">
-          <Radio.Group legend="判定模式" orientation="horizontal" value={f.successMode}
+        <Section title={tr("成功判定")}>
+          <Radio.Group legend={tr("判定模式")} orientation="horizontal" value={f.successMode}
             onValueChange={(v) => {
               set('successMode', v as TaskFormState['successMode'])
               setErrors((previous) => ({ ...previous, successKeyword: undefined, successRules: undefined }))
             }}>
-            <Radio.Item label="简单模式" value="simple" />
-            <Radio.Item label="高级模式" value="advanced" />
+            <Radio.Item label={tr("简单模式")} value="simple" />
+            <Radio.Item label={tr("高级模式")} value="advanced" />
           </Radio.Group>
-          {f.successMode === 'simple' ? <Input label="成功关键字（可选）" value={f.successKeyword}
-            onChange={(e) => set('successKeyword', e.target.value)} description="HTTP 2xx 即成功；填写后还需响应体包含该字符串。" {...err('successKeyword')} />
+          {f.successMode === 'simple' ? <Input label={tr("成功关键字（可选）")} value={f.successKeyword}
+            onChange={(e) => set('successKeyword', e.target.value)} description={tr("HTTP 2xx 即成功；填写后还需响应体包含该字符串。")} {...err('successKeyword')} />
             : <SuccessConditionEditor match={f.successMatch} rules={f.successRules} onMatchChange={(v) => set('successMatch', v)}
-              onRulesChange={(update) => set('successRules', update)} error={errors.successRules} />}
+              onRulesChange={(update) => set('successRules', update)} error={localizeIssueMessage(errors.successRules)} />}
         </Section>
 
-        <Section title="执行策略">
+        <Section title={tr("执行策略")}>
           <ExecutionModeField
             taskId={id}
             timeoutSeconds={f.timeoutSeconds}
             value={f.executionMode}
             onChange={(v) => set('executionMode', v)}
-            error={errors.executionMode}
+            error={localizeIssueMessage(errors.executionMode)}
           />
           <Radio.Group
-            legend="上次执行未结束时"
+            legend={tr("上次执行未结束时")}
             orientation="horizontal"
             value={f.overlapPolicy}
             onValueChange={(v) => set('overlapPolicy', v as TaskFormState['overlapPolicy'])}
           >
-            <Radio.Item label="跳过本次" value="skip" />
-            <Radio.Item label="并行执行" value="parallel" />
+            <Radio.Item label={tr("跳过本次")} value="skip" />
+            <Radio.Item label={tr("并行执行")} value="parallel" />
           </Radio.Group>
           <div className="grid gap-4 sm:grid-cols-2">
             <Input
-              label="失败重试次数"
+              label={tr("失败重试次数")}
               type="number"
               min={0}
               max={10}
               value={f.retryCount}
               onChange={(e) => set('retryCount', e.target.value)}
-              description="0–10，0 表示不重试"
+              description={tr("0–10，0 表示不重试")}
               {...err('retryCount')}
             />
             <Input
-              label="重试间隔（秒）"
+              label={tr("重试间隔（秒）")}
               type="number"
               min={1}
               max={3600}
@@ -293,29 +297,29 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           </div>
         </Section>
 
-        <Section title="失败告警" description="最后一次重试仍失败时发出告警。">
+        <Section title={tr("失败告警")} description={tr("最后一次重试仍失败时发出告警。")}>
           <Radio.Group
-            legend="告警方式"
+            legend={tr("告警方式")}
             orientation="horizontal"
             value={f.alertMode}
             onValueChange={(v) => set('alertMode', v as TaskFormState['alertMode'])}
           >
-            <Radio.Item label="使用全局设置" value="inherit" />
-            <Radio.Item label="关闭" value="off" />
-            <Radio.Item label="自定义 Webhook" value="custom" />
-            <Radio.Item label="cf-sender 主题" value="sender" />
+            <Radio.Item label={tr("使用全局设置")} value="inherit" />
+            <Radio.Item label={tr("关闭")} value="off" />
+            <Radio.Item label={tr("自定义 Webhook")} value="custom" />
+            <Radio.Item label={tr("cf-sender 主题")} value="sender" />
           </Radio.Group>
           {f.alertMode === 'sender' && (
             <Input
-              label="主题标识"
+              label={tr("主题标识")}
               className="font-mono"
               placeholder="ops-alert"
               value={f.alertTopic}
               onChange={(e) => set('alertTopic', e.target.value)}
               description={
                 me.data && !me.data.senderAvailable
-                  ? '当前部署没有配置 SENDER 服务绑定，告警会发送失败。见 wrangler.jsonc 的 services。'
-                  : '通过 cf-sender 扇出到该主题绑定的所有渠道（飞书、Telegram、邮件等）。'
+                  ? tr("当前部署没有配置 SENDER 服务绑定，告警会发送失败。见 wrangler.jsonc 的 services。")
+                  : tr("通过 cf-sender 扇出到该主题绑定的所有渠道（飞书、Telegram、邮件等）。")
               }
               {...err('alertTopic')}
             />
@@ -327,16 +331,16 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
                 className="font-mono"
                 value={f.alertUrl}
                 onChange={(e) => set('alertUrl', e.target.value)}
-                description="可用「变量」页创建的加密变量，例如 {{BARK_KEY}}；task.*、run.* 仅支持 Body 模板。"
+                description={tr("可用「变量」页创建的加密变量，例如 {{BARK_KEY}}；task.*、run.* 仅支持 Body 模板。")}
                 {...err('alertUrl')}
               />
               <InputArea
-                label="Body 模板（可选）"
+                label={tr("Body 模板（可选）")}
                 className="font-mono"
                 rows={4}
                 value={f.alertBodyTemplate}
                 onChange={(e) => set('alertBodyTemplate', e.target.value)}
-                description="留空则发送通用事件 JSON；下方列出可用变量及其写法。"
+                description={tr("留空则发送通用事件 JSON；下方列出可用变量及其写法。")}
                 {...err('alertBodyTemplate')}
               />
               <AlertTemplateHelp />
@@ -346,11 +350,10 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
 
         <div className="flex items-center gap-2">
           <Button type="submit" variant="primary" loading={save.isPending}>
-            {id ? '保存' : '创建任务'}
+            {id ? tr("保存") : tr("创建任务")}
           </Button>
           <LinkButton href={id ? `/tasks/${id}` : '/'} variant="ghost">
-            取消
-          </LinkButton>
+            {tr("取消")}</LinkButton>
         </div>
       </form>
     </>
@@ -370,6 +373,8 @@ function ExecutionModeField({
   onChange: (v: TaskFormState['executionMode']) => void
   error?: string
 }) {
+  useLocale()
+
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   // Suggest from this task's own recent durations (editing only).
   const stats = useQuery({
@@ -389,7 +394,7 @@ function ExecutionModeField({
         <ExecutionModeGuide timeoutMs={timeoutMs} taskMode={value} globalMode={me.data?.executionMode} queueAvailable={me.data?.queueAvailable} />
       </div>
       <Radio.Group
-        legend="执行方式"
+        legend={tr("执行方式")}
         appearance="card"
         orientation="horizontal"
         value={value}
@@ -398,9 +403,9 @@ function ExecutionModeField({
         description={!taskId || stats.data ? suggestionText(p95, timeoutMs, queueAvailable) : undefined}
       >
         <Radio.Item
-          label="跟随全局"
+          label={tr("跟随全局")}
           value="inherit"
-          description={me.data ? `当前全局：${MODE_LABEL[me.data.executionMode]}（设置页可修改）` : '可在设置页修改全局方式'}
+          description={me.data ? tr("当前全局：{0}（设置页可修改）", MODE_LABEL[me.data.executionMode]) : tr("可在设置页修改全局方式")}
         />
         <Radio.Item
           label={MODE_LABEL.worker}
@@ -408,25 +413,27 @@ function ExecutionModeField({
           disabled={!workerFits && value !== 'worker'}
           description={
             workerFits
-              ? 'Worker 后台执行，等待不计运行时长，适合短任务'
-              : `需要把超时设在 ${WORKER_MAX_TIMEOUT_SECONDS} 秒以内`
+              ? tr("Worker 后台执行，等待不计运行时长，适合短任务")
+              : tr("需要把超时设在 {0} 秒以内", WORKER_MAX_TIMEOUT_SECONDS)
           }
         />
         <Radio.Item
           label={MODE_LABEL.queue}
           value="queue"
           disabled={!queueAvailable && value !== 'queue'}
-          description={queueAvailable ? '经 Queue 投递执行，适合超时较长的慢接口' : '当前部署没有配置 Queue'}
+          description={queueAvailable ? tr("经 Queue 投递执行，适合超时较长的慢接口") : tr("当前部署没有配置 Queue")}
         />
-        <Radio.Item label={MODE_LABEL.direct} value="direct" description="调度器 DO 直接请求，等待按时长计费" />
+        <Radio.Item label={MODE_LABEL.direct} value="direct" description={tr("调度器 DO 直接请求，等待按时长计费")} />
       </Radio.Group>
     </div>
   )
 }
 
 function CronPreview({ cron, timezone, hideError }: { cron: string; timezone: string; hideError: boolean }) {
+  useLocale()
+
   const preview = useMemo(() => {
-    if (!isValidTimezone(timezone)) return { error: '时区无效' }
+    if (!isValidTimezone(timezone)) return { error: tr("时区无效") }
     const error = validateCron(cron, timezone)
     if (error) return { error }
     const times: number[] = []
@@ -445,12 +452,12 @@ function CronPreview({ cron, timezone, hideError }: { cron: string; timezone: st
     <div className="rounded-lg bg-kumo-recessed px-3 py-2 text-sm">
       {'error' in preview ? (
         <Text variant="error" size="sm">
-          {preview.error}
+          {localizeIssueMessage(preview.error)}
         </Text>
       ) : (
         <Text variant="secondary" size="sm">
-          接下来：{preview.times.length ? preview.times.map((t) => fmtTime(t, timezone)).join('、') : '不会再触发'}
-          <span className="ml-1">（{timezone}）</span>
+          {tr("接下来：")}{preview.times.length ? preview.times.map((t) => fmtTime(t, timezone)).join(tr('、')) : tr("不会再触发")}
+          <span className="ml-1">{tr('（')}{timezone}{tr('）')}</span>
         </Text>
       )}
     </div>
@@ -466,23 +473,24 @@ function HeadersEditor({
   onChange: (rows: HeaderRow[]) => void
   error?: string
 }) {
+  useLocale()
+
   const update = (i: number, patch: Partial<HeaderRow>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   return (
     <div className="flex flex-col gap-2">
       <Text size="sm" bold as="span">
-        请求头
-      </Text>
+        {tr("请求头")}</Text>
       {rows.map((row, i) => (
         <div key={i} className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)_auto] gap-2">
           <Input
-            aria-label={`请求头 ${i + 1} 名称`}
+            aria-label={tr("请求头 {0} 名称", i + 1)}
             placeholder="Authorization"
             className="font-mono"
             value={row.key}
             onChange={(e) => update(i, { key: e.target.value })}
           />
           <Input
-            aria-label={`请求头 ${i + 1} 值`}
+            aria-label={tr("请求头 {0} 值", i + 1)}
             placeholder="Bearer {{API_KEY}}"
             className="font-mono"
             value={row.value}
@@ -493,7 +501,7 @@ function HeadersEditor({
             variant="ghost"
             shape="square"
             icon={TrashIcon}
-            aria-label="删除请求头"
+            aria-label={tr("删除请求头")}
             onClick={() => onChange(rows.filter((_, j) => j !== i))}
           />
         </div>
@@ -505,8 +513,7 @@ function HeadersEditor({
       )}
       <div>
         <Button type="button" size="sm" icon={PlusIcon} onClick={() => onChange([...rows, { key: '', value: '' }])}>
-          添加请求头
-        </Button>
+          {tr("添加请求头")}</Button>
       </div>
     </div>
   )

@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Text } from '@cloudflare/kumo'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -8,6 +9,8 @@ import { DelayChart, DurationChart, HistogramChart, KpiTiles, RangeTabs, Results
 
 /** Stats section of the task detail page; lazy-loaded with ECharts. */
 export default function TaskStats({ taskId, scheduled }: { taskId: string; scheduled: boolean }) {
+  useLocale()
+
   const [range, setRange] = useState<StatsRange>('24h')
   const stats = useQuery({
     queryKey: ['stats', 'task', taskId, range],
@@ -20,8 +23,7 @@ export default function TaskStats({ taskId, scheduled }: { taskId: string; sched
     <section className="mt-6 flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Text variant="heading" as="h2">
-          统计
-        </Text>
+          {tr("统计")}</Text>
         <RangeTabs value={range} onChange={setRange} />
       </div>
       {stats.isPending ? (
@@ -29,7 +31,7 @@ export default function TaskStats({ taskId, scheduled }: { taskId: string; sched
       ) : stats.isError ? (
         <ErrorBanner error={stats.error} />
       ) : stats.data.summary.total === 0 ? (
-        <Text variant="secondary">这段时间没有执行记录。</Text>
+        <Text variant="secondary">{tr("这段时间没有执行记录。")}</Text>
       ) : (
         <div className={`flex flex-col gap-4 transition-opacity ${stats.isPlaceholderData ? 'opacity-60' : ''}`}>
           <KpiTiles summary={stats.data.summary} />

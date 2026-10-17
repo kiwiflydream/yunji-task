@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Combobox } from '@cloudflare/kumo'
 import { useMemo } from 'react'
 import { DEFAULT_TIMEZONE } from '../../../src/lib/time'
@@ -25,31 +26,33 @@ const CITIES: Record<string, string> = {
 }
 
 const TIMEZONES = [...new Set([DEFAULT_TIMEZONE, 'UTC', ...Object.keys(CITIES), ...Intl.supportedValuesOf('timeZone')])]
-const label = (zone: string) => CITIES[zone] ? `${CITIES[zone]} — ${zone}` : zone.replaceAll('_', ' ')
+const label = (zone: string) => CITIES[zone] ? `${tr(CITIES[zone])} — ${zone}` : zone.replaceAll('_', ' ')
 
 export function TimezoneSelect({ value, onChange, error }: {
   value: string
   onChange: (value: string) => void
   error?: string
 }) {
+  useLocale()
+
   const items = useMemo(() => TIMEZONES.includes(value) ? TIMEZONES : [value, ...TIMEZONES], [value])
   return (
     <Combobox
-      label="时区"
+      label={tr("时区")}
       items={items}
       value={value}
       onValueChange={(zone) => { if (zone) onChange(zone) }}
-      itemToStringLabel={label}
-      filter={(zone, query) => `${zone} ${label(zone)}`.toLowerCase().includes(query.trim().toLowerCase())}
-      description="默认上海／北京（Asia/Shanghai）；可搜索城市名或 IANA 标识。调度和触发时间预览均使用所选时区。"
+      itemToStringLabel={(zone) => label(zone)}
+      filter={(zone, query) => `${zone} ${CITIES[zone] ?? ""} ${label(zone)}`.toLowerCase().includes(query.trim().toLowerCase())}
+      description={tr("默认上海／北京（Asia/Shanghai）；可搜索城市名或 IANA 标识。调度和触发时间预览均使用所选时区。")}
       error={error}
     >
-      <Combobox.TriggerInput placeholder="搜索时区，例如上海、Tokyo、UTC" clearLabel="清空搜索" showOptionsLabel="选择时区" />
+      <Combobox.TriggerInput placeholder={tr("搜索时区，例如上海、Tokyo、UTC")} clearLabel={tr("清空搜索")} showOptionsLabel={tr("选择时区")} />
       <Combobox.Content>
         <Combobox.List>
           {(zone: string) => <Combobox.Item key={zone} value={zone}>{label(zone)}</Combobox.Item>}
         </Combobox.List>
-        <Combobox.Empty>没有匹配的时区，请尝试城市名或 IANA 标识。</Combobox.Empty>
+        <Combobox.Empty>{tr("没有匹配的时区，请尝试城市名或 IANA 标识。")}</Combobox.Empty>
       </Combobox.Content>
     </Combobox>
   )

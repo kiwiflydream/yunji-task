@@ -1,3 +1,5 @@
+import { localizeIssueMessage } from '../locale'
+import { tr, useLocale } from '../i18n'
 import {
   Banner,
   Button,
@@ -23,6 +25,8 @@ import { ErrorBanner, PageLoader } from '../components/States'
 import { fmtTime } from '../lib/format'
 
 export function VariablesPage() {
+  useLocale()
+
   const variables = useQuery({ queryKey: ['variables'], queryFn: api.variables })
   const [editing, setEditing] = useState<{ name: string; description: string; isNew: boolean } | null>(null)
   const [deleting, setDeleting] = useState<VariableInfo | null>(null)
@@ -31,31 +35,30 @@ export function VariablesPage() {
   const remove = useMutation({
     mutationFn: (name: string) => api.deleteVariable(name),
     onSuccess: () => {
-      toasts.add({ title: '变量已删除', variant: 'success' })
+      toasts.add({ title: tr("变量已删除"), variant: 'success' })
       setDeleting(null)
       qc.invalidateQueries({ queryKey: ['variables'] })
     },
-    onError: (err) => toasts.add({ title: '删除失败', description: errorMessage(err), variant: 'error' }),
+    onError: (err) => toasts.add({ title: tr("删除失败"), description: errorMessage(err), variant: 'error' }),
   })
 
   const addButton = (
     <Button variant="primary" icon={PlusIcon} onClick={() => setEditing({ name: '', description: '', isNew: true })}>
-      添加变量
-    </Button>
+      {tr("添加变量")}</Button>
   )
 
   return (
     <>
       <PageHeader
-        title="变量"
-        description="加密保存的密钥和令牌，在任务中用 {{NAME}} 引用。"
+        title={tr("变量")}
+        description={tr("加密保存的密钥和令牌，在任务中用 {{NAME}} 引用。")}
         actions={addButton}
       />
       <div className="mb-4">
         <Banner
           variant="secondary"
           icon={<InfoIcon weight="fill" />}
-          description="变量值用 AES-GCM 加密后存入 D1，保存后不再显示。可在任务的 URL、请求头、Body 以及告警 URL / 模板中引用；执行日志里出现的变量值会被替换为 ***。"
+          description={tr("变量值用 AES-GCM 加密后存入 D1，保存后不再显示。可在任务的 URL、请求头、Body 以及告警 URL / 模板中引用；执行日志里出现的变量值会被替换为 ***。")}
         />
       </div>
       {variables.isPending ? (
@@ -66,8 +69,8 @@ export function VariablesPage() {
         <LayerCard className="py-12">
           <Empty
             icon={<KeyIcon size={48} className="text-kumo-inactive" />}
-            title="还没有变量"
-            description="把 API Token、Webhook 密钥等存成变量，避免明文写在任务里。"
+            title={tr("还没有变量")}
+            description={tr("把 API Token、Webhook 密钥等存成变量，避免明文写在任务里。")}
             contents={addButton}
           />
         </LayerCard>
@@ -76,9 +79,9 @@ export function VariablesPage() {
           <Table>
             <Table.Header>
               <Table.Row>
-                <Table.Head>名称</Table.Head>
-                <Table.Head>描述</Table.Head>
-                <Table.Head>更新时间</Table.Head>
+                <Table.Head>{tr("名称")}</Table.Head>
+                <Table.Head>{tr("描述")}</Table.Head>
+                <Table.Head>{tr("更新时间")}</Table.Head>
                 <Table.Head className="w-24" />
               </Table.Row>
             </Table.Header>
@@ -103,8 +106,8 @@ export function VariablesPage() {
                         size="sm"
                         shape="square"
                         icon={ArrowsClockwiseIcon}
-                        aria-label={`更新 ${v.name} 的值`}
-                        title="更新值"
+                        aria-label={tr("更新 {0} 的值", v.name)}
+                        title={tr("更新值")}
                         onClick={() => setEditing({ name: v.name, description: v.description, isNew: false })}
                       />
                       <Button
@@ -112,8 +115,8 @@ export function VariablesPage() {
                         size="sm"
                         shape="square"
                         icon={TrashIcon}
-                        aria-label={`删除 ${v.name}`}
-                        title="删除"
+                        aria-label={tr("删除 {0}", v.name)}
+                        title={tr("删除")}
                         onClick={() => setDeleting(v)}
                       />
                     </div>
@@ -129,9 +132,9 @@ export function VariablesPage() {
       <ConfirmDialog
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
-        title="删除变量"
-        description={`确定删除 ${deleting?.name}？引用它的任务会执行失败。`}
-        confirmLabel="删除"
+        title={tr("删除变量")}
+        description={tr("确定删除 {0}？引用它的任务会执行失败。", deleting?.name)}
+        confirmLabel={tr("删除")}
         pending={remove.isPending}
         onConfirm={() => deleting && remove.mutate(deleting.name)}
       />
@@ -146,6 +149,8 @@ function VariableDialog({
   initial: { name: string; description: string; isNew: boolean }
   onClose: () => void
 }) {
+  useLocale()
+
   const [name, setName] = useState(initial.name)
   const [value, setValue] = useState('')
   const [description, setDescription] = useState(initial.description)
@@ -155,7 +160,7 @@ function VariableDialog({
   const save = useMutation({
     mutationFn: () => api.putVariable(name.trim(), value, description.trim()),
     onSuccess: () => {
-      toasts.add({ title: initial.isNew ? '变量已添加' : '变量已更新', variant: 'success' })
+      toasts.add({ title: initial.isNew ? tr("变量已添加") : tr("变量已更新"), variant: 'success' })
       qc.invalidateQueries({ queryKey: ['variables'] })
       onClose()
     },
@@ -163,8 +168,8 @@ function VariableDialog({
   })
   const submit = () => {
     const next: typeof error = {}
-    if (!VARIABLE_NAME_RE.test(name.trim())) next.name = '只能包含字母、数字、下划线，且不能以数字开头'
-    if (!value) next.value = '值不能为空'
+    if (!VARIABLE_NAME_RE.test(name.trim())) next.name = tr("只能包含字母、数字、下划线，且不能以数字开头")
+    if (!value) next.value = tr("值不能为空")
     setError(next)
     if (!next.name && !next.value) save.mutate()
   }
@@ -172,7 +177,7 @@ function VariableDialog({
   return (
     <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
       <Dialog size="lg" className="p-6">
-        <Dialog.Title className="text-lg font-semibold">{initial.isNew ? '添加变量' : `更新 ${initial.name}`}</Dialog.Title>
+        <Dialog.Title className="text-lg font-semibold">{initial.isNew ? tr("添加变量") : tr("更新 {0}", initial.name)}</Dialog.Title>
         <form
           className="mt-4 flex flex-col gap-4"
           onSubmit={(e) => {
@@ -181,32 +186,31 @@ function VariableDialog({
           }}
         >
           <Input
-            label="名称"
+            label={tr("名称")}
             className="font-mono"
             placeholder="API_TOKEN"
             value={name}
             disabled={!initial.isNew}
             onChange={(e) => setName(e.target.value)}
-            {...(error.name ? { error: error.name } : {})}
+            {...(error.name ? { error: localizeIssueMessage(error.name) } : {})}
           />
           <SensitiveInput
-            label="值"
+            label={tr("值")}
             value={value}
             onValueChange={setValue}
             autoComplete="off"
-            {...(error.value ? { error: error.value } : {})}
+            {...(error.value ? { error: localizeIssueMessage(error.value) } : {})}
           />
           <Input
-            label="描述（可选）"
+            label={tr("描述（可选）")}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
           />
           {error.other && <Banner variant="error" size="sm" description={error.other} />}
           <div className="flex justify-end gap-2">
-            <Dialog.Close render={(p) => <Button {...p}>取消</Button>} />
+            <Dialog.Close render={(p) => <Button {...p}>{tr("取消")}</Button>} />
             <Button type="submit" variant="primary" loading={save.isPending}>
-              保存
-            </Button>
+              {tr("保存")}</Button>
           </div>
         </form>
       </Dialog>

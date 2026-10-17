@@ -1,10 +1,11 @@
+import { tr, useLocale } from '../i18n'
 import { Banner, Button, Empty, LayerCard, LinkButton, Table, Text } from '@cloudflare/kumo'
 import { LightningIcon, PauseIcon, PencilSimpleIcon, PlayIcon, ListBulletsIcon, WarningIcon } from '@phosphor-icons/react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { lazy, Suspense, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { Run } from '../../../src/shared/types'
-import { describeSuccessRule } from '../../../src/executor/success-condition'
+import { describeLocalizedSuccessRule } from '../lib/success-rules'
 import { api, ApiError, type TaskView } from '../api'
 import { EnabledBadge, RunStatusBadge } from '../components/badges'
 import { DescriptionList } from '../components/DescriptionList'
@@ -19,6 +20,8 @@ import { fmtDuration, fmtRelative, fmtTime } from '../lib/format'
 const TaskStats = lazy(() => import('../components/TaskStats'))
 
 export function TaskDetailPage({ id }: { id: string }) {
+  useLocale()
+
   const [, navigate] = useLocation()
   const task = useQuery({ queryKey: ['task', id], queryFn: () => api.task(id), refetchInterval: 10_000 })
   const { trigger, setEnabled } = useTaskActions()
@@ -31,25 +34,23 @@ export function TaskDetailPage({ id }: { id: string }) {
   return (
     <>
       <PageHeader
-        crumbs={[{ label: '任务', href: '/' }, { label: t.name }]}
+        crumbs={[{ label: tr("任务"), href: '/' }, { label: t.name }]}
         title={t.name}
         badge={<EnabledBadge enabled={t.enabled} />}
         description={t.description || undefined}
         actions={
           <>
             <Button variant="primary" icon={LightningIcon} loading={trigger.isPending} onClick={() => trigger.mutate(t.id)}>
-              立即执行
-            </Button>
+              {tr("立即执行")}</Button>
             <Button
               icon={t.enabled ? PauseIcon : PlayIcon}
               loading={setEnabled.isPending}
               onClick={() => setEnabled.mutate({ id: t.id, enabled: !t.enabled })}
             >
-              {t.enabled ? '停用' : '启用'}
+              {t.enabled ? tr("停用") : tr("启用")}
             </Button>
             <LinkButton href={`/tasks/${t.id}/edit`} icon={PencilSimpleIcon}>
-              编辑
-            </LinkButton>
+              {tr("编辑")}</LinkButton>
             <TaskMenu task={t} onDeleted={() => navigate('/')} />
           </>
         }
@@ -76,6 +77,8 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function ScheduleCard({ task }: { task: TaskView }) {
+  useLocale()
+
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const scheduler = useQuery({
     queryKey: ['scheduler', task.id],
@@ -84,40 +87,40 @@ function ScheduleCard({ task }: { task: TaskView }) {
   })
   const s = task.schedule
   const items: [string, React.ReactNode][] = [
-    ['类型', s.type === 'cron' ? 'Cron' : s.type === 'once' ? '一次性' : '仅手动 / API'],
+    [tr("类型"), s.type === 'cron' ? 'Cron' : s.type === 'once' ? tr("一次性") : tr("仅手动 / API")],
   ]
-  if (s.type === 'cron') items.push(['表达式', <Text variant="mono">{s.cron}</Text>])
-  if (s.type === 'once') items.push(['执行时间', fmtTime(s.runAt, s.timezone)])
-  items.push(['时区', s.timezone])
-  items.push(['下次执行', task.nextRunAt ? `${fmtTime(task.nextRunAt)}（${fmtRelative(task.nextRunAt)}）` : '—'])
-  items.push(['上次未结束时', task.overlapPolicy === 'skip' ? '跳过本次' : '并行执行'])
+  if (s.type === 'cron') items.push([tr("表达式"), <Text variant="mono">{s.cron}</Text>])
+  if (s.type === 'once') items.push([tr("执行时间"), fmtTime(s.runAt, s.timezone)])
+  items.push([tr("时区"), s.timezone])
+  items.push([tr("下次执行"), task.nextRunAt ? `${fmtTime(task.nextRunAt)}（${fmtRelative(task.nextRunAt)}）` : '—'])
+  items.push([tr("上次未结束时"), task.overlapPolicy === 'skip' ? tr("跳过本次") : tr("并行执行")])
   items.push([
-    '失败重试',
-    task.retry.count === 0 ? '不重试' : `${task.retry.count} 次，间隔 ${task.retry.intervalSeconds} 秒`,
+    tr("失败重试"),
+    task.retry.count === 0 ? tr("不重试") : tr("{0} 次，间隔 {1} 秒", task.retry.count, task.retry.intervalSeconds),
   ])
-  if (me.data) items.push(['执行方式', describeTaskMode(task.executionMode, task.executor.config.timeoutMs, me.data)])
+  if (me.data) items.push([tr("执行方式"), describeTaskMode(task.executionMode, task.executor.config.timeoutMs, me.data)])
   items.push([
-    '失败告警',
+    tr("失败告警"),
     task.alert.mode === 'inherit'
-      ? '使用全局设置'
+      ? tr("使用全局设置")
       : task.alert.mode === 'off'
-        ? '关闭'
+        ? tr("关闭")
         : task.alert.mode === 'sender'
-          ? `cf-sender 主题 ${task.alert.topic}`
+          ? tr("cf-sender 主题 {0}", task.alert.topic)
           : task.alert.url,
   ])
   const st = scheduler.data
   if (st) {
     items.push([
-      '调度器',
+      tr("调度器"),
       <Text size="sm" variant="secondary">
         v{st.version ?? '—'} · alarm {fmtTime(st.alarmAt)}
-        {st.running && ` · 执行中 ${st.running.runId.slice(0, 8)}`}
+        {st.running && tr(" · 执行中 {0}", st.running.runId.slice(0, 8))}
       </Text>,
     ])
   }
   return (
-    <Card title="调度">
+    <Card title={tr("调度")}>
       <DescriptionList items={items} />
       {st && st.version !== task.version && (
         <div className="mt-4">
@@ -125,7 +128,7 @@ function ScheduleCard({ task }: { task: TaskView }) {
             variant="alert"
             size="sm"
             icon={<WarningIcon weight="fill" />}
-            description={`调度器版本（v${st.version ?? '—'}）与配置版本（v${task.version}）不一致。未同步的修改会在 5 分钟内重试，每小时还会全量对账修复调度状态。`}
+            description={tr("调度器版本（v{0}）与配置版本（v{1}）不一致。未同步的修改会在 5 分钟内重试，每小时还会全量对账修复调度状态。", st.version ?? '—', task.version)}
           />
         </div>
       )}
@@ -134,20 +137,22 @@ function ScheduleCard({ task }: { task: TaskView }) {
 }
 
 function RequestCard({ task }: { task: TaskView }) {
+  useLocale()
+
   const cfg = task.executor.config
   const headers = Object.entries(cfg.headers)
   return (
-    <Card title="HTTP 请求">
+    <Card title={tr("HTTP 请求")}>
       <DescriptionList
         items={[
           [
-            '请求',
+            tr("请求"),
             <Text variant="mono">
               {cfg.method} {cfg.url}
             </Text>,
           ],
           [
-            '请求头',
+            tr("请求头"),
             headers.length ? (
               <div className="flex flex-col gap-0.5">
                 {headers.map(([k, v]) => (
@@ -161,11 +166,11 @@ function RequestCard({ task }: { task: TaskView }) {
             ),
           ],
           ['Body', cfg.body ? <Text variant="mono">{cfg.body.length > 200 ? cfg.body.slice(0, 200) + '…' : cfg.body}</Text> : '—'],
-          ['超时', `${cfg.timeoutMs / 1000} 秒`],
-          ['成功判定', cfg.successCondition ? <div className="flex min-w-0 flex-col gap-1 break-all">
-            <Text>高级模式 · {cfg.successCondition.match === 'all' ? '全部满足（AND）' : '任一满足（OR）'}</Text>
-            {cfg.successCondition.rules.map((rule, index) => <Text key={index} variant="mono">{index + 1}. {describeSuccessRule(rule)}</Text>)}
-          </div> : cfg.successKeyword ? <Text variant="mono">HTTP 2xx 且响应体包含 {JSON.stringify(cfg.successKeyword)}</Text> : '简单模式 · HTTP 2xx 即成功'],
+          [tr("超时"), tr("{0} 秒", cfg.timeoutMs / 1000)],
+          [tr("成功判定"), cfg.successCondition ? <div className="flex min-w-0 flex-col gap-1 break-all">
+            <Text>{tr("高级模式 ·")}{cfg.successCondition.match === 'all' ? tr("全部满足（AND）") : tr("任一满足（OR）")}</Text>
+            {cfg.successCondition.rules.map((rule, index) => <Text key={index} variant="mono">{index + 1}. {describeLocalizedSuccessRule(rule)}</Text>)}
+          </div> : cfg.successKeyword ? <Text variant="mono">{tr("HTTP 2xx 且响应体包含")}{JSON.stringify(cfg.successKeyword)}</Text> : tr("简单模式 · HTTP 2xx 即成功")],
         ]}
       />
     </Card>
@@ -173,6 +178,8 @@ function RequestCard({ task }: { task: TaskView }) {
 }
 
 function RunsCard({ taskId }: { taskId: string }) {
+  useLocale()
+
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const runs = useInfiniteQuery({
     queryKey: ['runs', taskId],
@@ -188,11 +195,10 @@ function RunsCard({ taskId }: { taskId: string }) {
     <div className="mt-4">
       <LayerCard className="p-0">
         <LayerCard.Secondary className="flex items-center justify-between">
-          <span>执行记录</span>
+          <span>{tr("执行记录")}</span>
           {me.data && (
             <Text size="xs" variant="secondary" as="span">
-              保留 {me.data.retentionDays} 天
-            </Text>
+              {tr("保留")}{me.data.retentionDays} {tr("天")}</Text>
           )}
         </LayerCard.Secondary>
         <LayerCard.Primary className="overflow-x-auto p-0">
@@ -207,29 +213,29 @@ function RunsCard({ taskId }: { taskId: string }) {
               <Empty
                 size="sm"
                 icon={<ListBulletsIcon size={32} className="text-kumo-inactive" />}
-                title="暂无执行记录"
-                description="任务触发后，结果会出现在这里。"
+                title={tr("暂无执行记录")}
+                description={tr("任务触发后，结果会出现在这里。")}
               />
             </div>
           ) : (
             <Table>
               <Table.Header>
                 <Table.Row>
-                  <Table.Head>时间</Table.Head>
-                  <Table.Head>触发</Table.Head>
-                  <Table.Head>实际执行方式</Table.Head>
-                  <Table.Head>状态</Table.Head>
-                  <Table.Head>尝试</Table.Head>
+                  <Table.Head>{tr("时间")}</Table.Head>
+                  <Table.Head>{tr("触发")}</Table.Head>
+                  <Table.Head>{tr("实际执行方式")}</Table.Head>
+                  <Table.Head>{tr("状态")}</Table.Head>
+                  <Table.Head>{tr("尝试")}</Table.Head>
                   <Table.Head>HTTP</Table.Head>
-                  <Table.Head>耗时</Table.Head>
-                  <Table.Head>错误</Table.Head>
+                  <Table.Head>{tr("耗时")}</Table.Head>
+                  <Table.Head>{tr("错误")}</Table.Head>
                 </Table.Row>
               </Table.Header>
               <Table.Body>
                 {all.map((r) => (
                   <Table.Row key={r.id} className="cursor-pointer" onClick={() => setSelected(r)}>
                     <Table.Cell className="whitespace-nowrap">{fmtTime(r.createdAt)}</Table.Cell>
-                    <Table.Cell>{r.trigger === 'manual' ? '手动' : '调度'}</Table.Cell>
+                    <Table.Cell>{r.trigger === 'manual' ? tr("手动") : tr("调度")}</Table.Cell>
                     <Table.Cell className="whitespace-nowrap">{r.executionMode ? MODE_LABEL[r.executionMode] : '—'}</Table.Cell>
                     <Table.Cell>
                       <RunStatusBadge status={r.status} />
@@ -252,8 +258,7 @@ function RunsCard({ taskId }: { taskId: string }) {
       {runs.hasNextPage && (
         <div className="mt-3 flex justify-center">
           <Button variant="ghost" loading={runs.isFetchingNextPage} onClick={() => runs.fetchNextPage()}>
-            加载更早的记录
-          </Button>
+            {tr("加载更早的记录")}</Button>
         </div>
       )}
       <RunDialog run={selected} onClose={() => setSelected(null)} />

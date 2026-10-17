@@ -1,4 +1,12 @@
-import { NUMERIC_COMPARISONS, type Comparison, type SuccessRule } from '../../../src/executor/success-condition'
+import { COMPARISON_LABELS, NUMERIC_COMPARISONS, type Comparison, type SuccessRule } from '../../../src/executor/success-condition'
+import { tr } from '../locale'
+
+export function describeLocalizedSuccessRule(rule: SuccessRule): string {
+  const target = rule.type === 'status' ? tr('HTTP 响应码') : rule.type === 'body' ? tr('响应正文') : `${tr('JSON 字段')} ${rule.path}`
+  const operator = tr(COMPARISON_LABELS[rule.operator])
+  if (rule.operator === 'exists' || rule.operator === 'not_exists') return `${target} ${operator}`
+  return `${target} ${operator} ${JSON.stringify(rule.value)}${rule.type === 'status' && rule.operator === 'between' ? `–${rule.valueTo}` : ''}`
+}
 
 export interface SuccessRuleForm {
   id: string

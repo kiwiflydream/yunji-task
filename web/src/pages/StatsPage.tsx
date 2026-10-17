@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Empty, LayerCard } from '@cloudflare/kumo'
 import { ChartBarIcon } from '@phosphor-icons/react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
@@ -17,6 +18,8 @@ import {
 } from '../components/stats'
 
 export default function StatsPage() {
+  useLocale()
+
   const [range, setRange] = useState<StatsRange>('24h')
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
   const stats = useQuery({
@@ -29,8 +32,8 @@ export default function StatsPage() {
   return (
     <>
       <PageHeader
-        title="统计"
-        description={`所有任务的执行情况，按小时汇总${me.data ? `，保留 ${me.data.statsRetentionDays} 天` : ''}。`}
+        title={tr("统计")}
+        description={tr("所有任务的执行情况，按小时汇总{0}。", me.data ? tr("，保留 {0} 天", me.data.statsRetentionDays) : '')}
         actions={<RangeTabs value={range} onChange={setRange} />}
       />
       {stats.isPending ? (
@@ -41,8 +44,8 @@ export default function StatsPage() {
         <LayerCard className="py-12">
           <Empty
             icon={<ChartBarIcon size={48} className="text-kumo-inactive" />}
-            title="这段时间没有执行"
-            description="任务执行后，这里会出现图表。"
+            title={tr("这段时间没有执行")}
+            description={tr("任务执行后，这里会出现图表。")}
           />
         </LayerCard>
       ) : (
@@ -54,8 +57,8 @@ export default function StatsPage() {
             <DelayChart ctx={stats.data} summary={stats.data.summary} />
           </div>
           <div className="grid items-start gap-4 lg:grid-cols-2">
-            <TaskRanking title="失败最多" metric="failed" rows={stats.data.topFailing} empty="这段时间没有失败的执行。" />
-            <TaskRanking title="最慢（P95 耗时）" metric="p95" rows={stats.data.slowest} empty="暂无耗时数据。" />
+            <TaskRanking title={tr("失败最多")} metric="failed" rows={stats.data.topFailing} empty={tr("这段时间没有失败的执行。")} />
+            <TaskRanking title={tr("最慢（P95 耗时）")} metric="p95" rows={stats.data.slowest} empty={tr("暂无耗时数据。")} />
           </div>
         </div>
       )}

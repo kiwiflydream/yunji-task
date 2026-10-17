@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'wouter'
 import { api } from '../api'
@@ -15,19 +16,21 @@ const BUILTINS = [
 ] as const
 
 export function AlertTemplateHelp() {
+  useLocale()
+
   const variables = useQuery({ queryKey: ['variables'], queryFn: api.variables })
   return (
-    <section aria-label="通知模板变量说明" className="flex flex-col gap-3 rounded-lg bg-kumo-recessed p-3 text-sm">
+    <section aria-label={tr("通知模板变量说明")} className="flex flex-col gap-3 rounded-lg bg-kumo-recessed p-3 text-sm">
       <div>
-        <h3 className="font-medium">通知模板可用变量</h3>
-        <p className="mt-1 text-kumo-subtle">最终失败时自动填入以下信息，无需创建变量。内置变量仅支持 Body 模板。</p>
+        <h3 className="font-medium">{tr("通知模板可用变量")}</h3>
+        <p className="mt-1 text-kumo-subtle">{tr("最终失败时自动填入以下信息，无需创建变量。内置变量仅支持 Body 模板。")}</p>
       </div>
       <table className="w-full table-fixed text-left text-xs sm:text-sm">
-        <caption className="sr-only">Body 模板内置变量、含义和示例值</caption>
+        <caption className="sr-only">{tr("Body 模板内置变量、含义和示例值")}</caption>
         <thead>
           <tr className="border-b border-kumo-line">
-            <th scope="col" className="w-[42%] py-2 pr-3 font-medium">变量写法</th>
-            <th scope="col" className="py-2 font-medium">含义与示例</th>
+            <th scope="col" className="w-[42%] py-2 pr-3 font-medium">{tr("变量写法")}</th>
+            <th scope="col" className="py-2 font-medium">{tr("含义与示例")}</th>
           </tr>
         </thead>
         <tbody>
@@ -35,25 +38,23 @@ export function AlertTemplateHelp() {
             <tr key={name} className="border-b border-kumo-line last:border-0">
               <th scope="row" className="py-2 pr-3 align-top font-normal"><code className="break-all">{`{{${name}}}`}</code></th>
               <td className="py-2 align-top">
-                <div>{description}</div>
-                <div className="mt-1 break-all text-kumo-subtle">示例：<code>{example}</code></div>
+                <div>{tr(description)}</div>
+                <div className="mt-1 break-all text-kumo-subtle">{tr("示例：")}<code>{tr(example)}</code></div>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
       <div className="flex flex-col gap-2 border-t border-kumo-line pt-3">
-        <h4 className="font-medium">自定义加密变量</h4>
+        <h4 className="font-medium">{tr("自定义加密变量")}</h4>
         <p className="text-kumo-subtle">
-          在<Link href="/variables" className="mx-1 underline">「变量」页</Link>创建，按名称引用，例如 <code>{'{{BARK_KEY}}'}</code>。
-          Webhook URL 和 Body 模板都支持自定义变量。
-        </p>
+          {tr("在")}<Link href="/variables" className="mx-1 underline">{tr("「变量」页")}</Link>{tr("创建，按名称引用，例如")}<code>{'{{BARK_KEY}}'}</code>{tr("。 Webhook URL 和 Body 模板都支持自定义变量。")}</p>
         {variables.isPending ? (
-          <p className="text-kumo-subtle">正在读取已配置的自定义变量…</p>
+          <p className="text-kumo-subtle">{tr("正在读取已配置的自定义变量…")}</p>
         ) : variables.isError ? (
-          <p className="text-kumo-subtle">暂时无法加载自定义变量列表，请前往「变量」页查看。</p>
+          <p className="text-kumo-subtle">{tr("暂时无法加载自定义变量列表，请前往「变量」页查看。")}</p>
         ) : variables.data.length ? (
-          <ul aria-label="已配置的自定义变量" className="flex flex-col gap-1.5">
+          <ul aria-label={tr("已配置的自定义变量")} className="flex flex-col gap-1.5">
             {variables.data.map((variable) => (
               <li key={variable.name} className="break-words">
                 <code className="break-all">{`{{${variable.name}}}`}</code>
@@ -62,13 +63,11 @@ export function AlertTemplateHelp() {
             ))}
           </ul>
         ) : (
-          <p className="text-kumo-subtle">尚未配置自定义变量；使用 BARK_KEY 等名称前，请先在「变量」页添加。</p>
+          <p className="text-kumo-subtle">{tr("尚未配置自定义变量；使用 BARK_KEY 等名称前，请先在「变量」页添加。")}</p>
         )}
       </div>
       <p className="border-t border-kumo-line pt-3 text-kumo-subtle">
-        Body 中的变量均按字符串替换，请放在 JSON 双引号内，例如 <code className="break-all">{'"attempt":"{{run.attempt}}"'}</code>。
-        引号、换行等会自动转义；变量名拼错或自定义变量未创建，会导致告警发送失败。
-      </p>
+        {tr("Body 中的变量均按字符串替换，请放在 JSON 双引号内，例如")}<code className="break-all">{'"attempt":"{{run.attempt}}"'}</code>{tr("。 引号、换行等会自动转义；变量名拼错或自定义变量未创建，会导致告警发送失败。")}</p>
     </section>
   )
 }

@@ -16,6 +16,8 @@ test/       vitest（在 workerd 中运行）
 
 ## 本地开发
 
+后台支持简体中文与英文，可通过页面顶部的语言选择器切换。首次打开时跟随浏览器的首个受支持语言，其他语言回退到英文；手动选择会保存在当前浏览器，并在同源标签页间同步。语言切换不影响未保存的表单、任务时区、用户填写的数据或通知模板。英文界面的应用名为 Yunji Task。
+
 ```sh
 pnpm install
 cp .dev.vars.example .dev.vars   # 填入 API_TOKEN、ENCRYPTION_KEY 和 ADMIN_PASSWORD，生成方式见文件注释

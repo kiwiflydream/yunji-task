@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Empty, LayerCard, Link, LinkButton, Table, Text } from '@cloudflare/kumo'
 import { ClockCountdownIcon, PlusIcon } from '@phosphor-icons/react'
 import { useQuery } from '@tanstack/react-query'
@@ -10,16 +11,17 @@ import { fmtRelative, fmtTime } from '../lib/format'
 
 const NewTaskButton = () => (
   <LinkButton href="/tasks/new" variant="primary" icon={PlusIcon}>
-    新建任务
-  </LinkButton>
+    {tr("新建任务")}</LinkButton>
 )
 
 export function TasksPage() {
+  useLocale()
+
   const tasks = useQuery({ queryKey: ['tasks'], queryFn: api.tasks, refetchInterval: 10_000 })
 
   return (
     <>
-      <PageHeader title="任务" description="按 cron、指定时间或手动触发 HTTP 请求。" actions={<NewTaskButton />} />
+      <PageHeader title={tr("任务")} description={tr("按 cron、指定时间或手动触发 HTTP 请求。")} actions={<NewTaskButton />} />
       {tasks.isPending ? (
         <PageLoader />
       ) : tasks.isError ? (
@@ -28,8 +30,8 @@ export function TasksPage() {
         <LayerCard className="py-12">
           <Empty
             icon={<ClockCountdownIcon size={48} className="text-kumo-inactive" />}
-            title="还没有任务"
-            description="创建一个任务，按秒级 cron 或指定时间调用你的 HTTP 接口。"
+            title={tr("还没有任务")}
+            description={tr("创建一个任务，按秒级 cron 或指定时间调用你的 HTTP 接口。")}
             contents={<NewTaskButton />}
           />
         </LayerCard>
@@ -38,11 +40,11 @@ export function TasksPage() {
           <Table>
             <Table.Header>
               <Table.Row>
-                <Table.Head>名称</Table.Head>
-                <Table.Head>调度</Table.Head>
-                <Table.Head>状态</Table.Head>
-                <Table.Head>下次执行</Table.Head>
-                <Table.Head>最近执行</Table.Head>
+                <Table.Head>{tr("名称")}</Table.Head>
+                <Table.Head>{tr("调度")}</Table.Head>
+                <Table.Head>{tr("状态")}</Table.Head>
+                <Table.Head>{tr("下次执行")}</Table.Head>
+                <Table.Head>{tr("最近执行")}</Table.Head>
                 <Table.Head className="w-12" />
               </Table.Row>
             </Table.Header>
@@ -68,11 +70,10 @@ export function TasksPage() {
                         </Text>
                       </div>
                     ) : t.schedule.type === 'once' ? (
-                      <Text size="sm">一次性 · {fmtTime(t.schedule.runAt, t.schedule.timezone)}</Text>
+                      <Text size="sm">{tr("一次性 ·")}{fmtTime(t.schedule.runAt, t.schedule.timezone)}</Text>
                     ) : (
                       <Text size="sm" variant="secondary">
-                        仅手动 / API
-                      </Text>
+                        {tr("仅手动 / API")}</Text>
                     )}
                   </Table.Cell>
                   <Table.Cell>

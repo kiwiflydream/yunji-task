@@ -1,3 +1,4 @@
+import { getLocale, tr } from '../locale'
 import type { BadgeVariant } from '@cloudflare/kumo'
 import type { Task } from '../../../src/domain/task'
 import { formatInZone } from '../../../src/lib/time'
@@ -6,17 +7,23 @@ import type { RunStatus } from '../../../src/shared/types'
 /** Times are shown in the viewer's timezone; schedules keep their own. */
 export const viewerTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
-export const fmtTime = (ms: number | null | undefined, tz = viewerTimezone) => (ms ? formatInZone(ms, tz) : '—')
+export function fmtTime(ms: number | null | undefined, tz = viewerTimezone) {
+  if (ms == null) return '—'
+  return getLocale() === 'zh-CN' ? formatInZone(ms, tz) : new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz, year: 'numeric', month: 'short', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).format(ms)
+}
 
 export function fmtRelative(ms: number | null | undefined, now = Date.now()): string {
   if (!ms) return '—'
   const diff = ms - now
   const abs = Math.abs(diff)
-  const suffix = diff > 0 ? '后' : '前'
-  if (abs < 5_000) return diff > 0 ? '即将' : '刚刚'
-  if (abs < 60_000) return `${Math.round(abs / 1000)} 秒${suffix}`
-  if (abs < 3_600_000) return `${Math.round(abs / 60_000)} 分钟${suffix}`
-  if (abs < 86_400_000) return `${Math.round(abs / 3_600_000)} 小时${suffix}`
+  if (abs < 5_000) return diff > 0 ? tr("即将") : tr("刚刚")
+  const relative = new Intl.RelativeTimeFormat(getLocale(), { numeric: 'always' })
+  if (abs < 60_000) return relative.format(Math.round(diff / 1000), 'second')
+  if (abs < 3_600_000) return relative.format(Math.round(diff / 60_000), 'minute')
+  if (abs < 86_400_000) return relative.format(Math.round(diff / 3_600_000), 'hour')
   return fmtTime(ms)
 }
 
@@ -33,7 +40,7 @@ export function fmtDuration(ms: number | null): string {
 export const fmtPercent = (rate: number | null) =>
   rate === null ? '—' : rate === 1 ? '100%' : `${(Math.floor(rate * 1000) / 10).toFixed(1)}%`
 
-export const fmtCount = (n: number) => n.toLocaleString('zh-CN')
+export const fmtCount = (n: number) => n.toLocaleString(getLocale() === 'en' ? 'en-US' : 'zh-CN')
 
 /** Stats bucket label: `MM-DD HH:00` for hourly buckets, `MM-DD` for daily ones. */
 export const fmtBucket = (ms: number, granularity: 'hour' | 'day') =>
@@ -50,6 +57,6 @@ export const RUN_STATUS: Record<RunStatus, { label: string; variant: BadgeVarian
 export function scheduleSummary(task: Task): string {
   const s = task.schedule
   if (s.type === 'cron') return s.cron
-  if (s.type === 'once') return `一次性 · ${fmtTime(s.runAt, s.timezone)}`
-  return '仅手动 / API'
+  if (s.type === 'once') return tr("一次性 · {0}", fmtTime(s.runAt, s.timezone))
+  return tr("仅手动 / API")
 }

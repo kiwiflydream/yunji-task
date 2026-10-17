@@ -1,3 +1,4 @@
+import { getLocale, localizeIssueMessage } from './locale'
 import type { Task, TaskInputRaw, TaskSummary } from '../../src/domain/task'
 import type {
   AdminMe,
@@ -78,4 +79,6 @@ export const api = {
     request<{ settings: RuntimeSettings }>('/settings/runtime', json('PUT', settings)).then((r) => r.settings),
 }
 
-export const errorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err))
+export const errorMessage = (err: unknown) => err instanceof ApiError && err.issues.length
+  ? err.issues.map((issue) => localizeIssueMessage(issue.message)).join(getLocale() === 'en' ? '; ' : '；')
+  : err instanceof Error ? err.message : String(err)

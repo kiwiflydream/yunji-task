@@ -1,3 +1,4 @@
+import { useLocale } from './i18n'
 import { LinkProvider, type LinkComponentProps, Toasty, TooltipProvider } from '@cloudflare/kumo'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { forwardRef, lazy, Suspense, useEffect } from 'react'
@@ -33,6 +34,8 @@ function useSystemColorMode() {
 }
 
 export function App() {
+  useLocale()
+
   useSystemColorMode()
   return (
     <QueryClientProvider client={queryClient}>

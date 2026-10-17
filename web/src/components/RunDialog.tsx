@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Button, Dialog, Text } from '@cloudflare/kumo'
 import { XIcon } from '@phosphor-icons/react'
 import type { Run } from '../../../src/shared/types'
@@ -7,6 +8,8 @@ import { DescriptionList } from './DescriptionList'
 import { MODE_LABEL } from '../lib/execution-mode'
 
 export function RunDialog({ run, onClose }: { run: Run | null; onClose: () => void }) {
+  useLocale()
+
   return (
     <Dialog.Root open={run !== null} onOpenChange={(open) => !open && onClose()}>
       <Dialog size="xl" className="max-h-[85vh] overflow-y-auto p-6">
@@ -14,28 +17,28 @@ export function RunDialog({ run, onClose }: { run: Run | null; onClose: () => vo
           <>
             <div className="mb-4 flex items-start justify-between gap-4">
               <div className="flex items-center gap-2">
-                <Dialog.Title className="text-lg font-semibold">执行记录</Dialog.Title>
+                <Dialog.Title className="text-lg font-semibold">{tr("执行详情")}</Dialog.Title>
                 <RunStatusBadge status={run.status} />
               </div>
               <Dialog.Close
-                render={(p) => <Button {...p} variant="ghost" shape="square" icon={<XIcon />} aria-label="关闭" />}
+                render={(p) => <Button {...p} variant="ghost" shape="square" icon={<XIcon />} aria-label={tr("关闭")} />}
               />
             </div>
             <DescriptionList
               items={[
                 ['Run ID', <Text variant="mono">{run.id}</Text>],
-                ['触发方式', run.trigger === 'manual' ? '手动' : '调度'],
-                ['实际执行方式', run.executionMode ? MODE_LABEL[run.executionMode] : '—'],
-                ['生效超时', run.effectiveTimeoutMs === null ? '—' : `${run.effectiveTimeoutMs / 1000} 秒`],
-                ['计划时间', fmtTime(run.scheduledAt)],
-                ['开始 / 结束', `${fmtTime(run.startedAt)} / ${fmtTime(run.finishedAt)}`],
-                ['尝试次数', run.attempt || '—'],
-                ['HTTP 状态', run.httpStatus ?? '—'],
-                ['耗时', fmtDuration(run.durationMs)],
+                [tr("触发方式"), run.trigger === 'manual' ? tr("手动") : tr("调度")],
+                [tr("实际执行方式"), run.executionMode ? MODE_LABEL[run.executionMode] : '—'],
+                [tr("生效超时"), run.effectiveTimeoutMs === null ? '—' : tr("{0} 秒", run.effectiveTimeoutMs / 1000)],
+                [tr("计划时间"), fmtTime(run.scheduledAt)],
+                [tr("开始 / 结束"), `${fmtTime(run.startedAt)} / ${fmtTime(run.finishedAt)}`],
+                [tr("尝试次数"), run.attempt || '—'],
+                [tr("HTTP 状态"), run.httpStatus ?? '—'],
+                [tr("耗时"), fmtDuration(run.durationMs)],
               ]}
             />
-            {run.error && <Section title="错误">{run.error}</Section>}
-            {run.responseBody !== null && <Section title="响应体（前 4KB）">{run.responseBody || '(空)'}</Section>}
+            {run.error && <Section title={tr("错误")}>{run.error}</Section>}
+            {run.responseBody !== null && <Section title={tr("响应体（前 4KB）")}>{run.responseBody || tr("(空)")}</Section>}
           </>
         )}
       </Dialog>

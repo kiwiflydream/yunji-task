@@ -1,3 +1,4 @@
+import { tr, useLocale } from '../i18n'
 import { Button, Dialog } from '@cloudflare/kumo'
 import type { ReactNode } from 'react'
 
@@ -10,13 +11,15 @@ export function ConfirmDialog(props: {
   pending?: boolean
   onConfirm: () => void
 }) {
+  useLocale()
+
   return (
     <Dialog.Root open={props.open} onOpenChange={props.onOpenChange}>
       <Dialog className="p-6">
         <Dialog.Title className="text-lg font-semibold">{props.title}</Dialog.Title>
         <Dialog.Description className="mt-2 text-kumo-subtle">{props.description}</Dialog.Description>
         <div className="mt-6 flex justify-end gap-2">
-          <Dialog.Close render={(p) => <Button {...p}>取消</Button>} />
+          <Dialog.Close render={(p) => <Button {...p}>{tr("取消")}</Button>} />
           <Button variant="destructive" loading={props.pending} onClick={props.onConfirm}>
             {props.confirmLabel}
           </Button>
