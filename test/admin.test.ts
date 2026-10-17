@@ -50,7 +50,7 @@ describe('basic auth (default mode)', () => {
   it('challenges requests without credentials', async () => {
     const res = await get('/admin', env, {})
     expect(res.status).toBe(401)
-    expect(res.headers.get('www-authenticate')).toBe('Basic realm="cf-task", charset="UTF-8"')
+    expect(res.headers.get('www-authenticate')).toBe('Basic realm="yunji-task", charset="UTF-8"')
   })
 
   it('accepts the configured credentials', async () => {

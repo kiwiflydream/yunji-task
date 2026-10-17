@@ -30,10 +30,10 @@ function ShellContent({ children }: { children: ReactNode }) {
     <>
       <Sidebar aria-label="主导航">
         <Sidebar.Header className={compact ? 'justify-center px-0' : 'px-6'}>
-          <Link href="/" aria-label="cf-task 首页" title="cf-task 首页" onClick={closeMobileMenu}
+          <Link href="/" aria-label="云吉 Task 首页" title="云吉 Task 首页" onClick={closeMobileMenu}
             className={`flex h-9 shrink-0 items-center rounded-lg text-kumo-default no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-kumo-brand ${compact ? 'w-9 justify-center' : 'gap-2.5'}`}>
             <ClockCountdownIcon size={22} weight="duotone" className="shrink-0 text-kumo-brand" />
-            {!compact && <Text bold>cf-task</Text>}
+            {!compact && <Text bold>云吉 Task</Text>}
           </Link>
         </Sidebar.Header>
         <Sidebar.Content>
@@ -71,7 +71,7 @@ function ShellContent({ children }: { children: ReactNode }) {
       <main className="min-w-0 flex-1 overflow-y-auto bg-kumo-canvas">
         <div className="flex items-center gap-2 border-b border-kumo-hairline bg-kumo-base px-4 py-2 md:hidden">
           <SidebarToggle />
-          <Text bold>cf-task</Text>
+          <Text bold>云吉 Task</Text>
         </div>
         <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-6">{children}</div>
       </main>

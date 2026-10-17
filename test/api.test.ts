@@ -8,7 +8,7 @@ const AUTH = { authorization: `Bearer ${env.API_TOKEN}` }
 
 function call(path: string, init: RequestInit = {}, e: CloudflareBindings = env) {
   const headers = { ...AUTH, 'content-type': 'application/json', ...(init.headers as Record<string, string>) }
-  return app.request(`http://cf-task.test/api${path}`, { ...init, headers }, e)
+  return app.request(`http://yunji-task.test/api${path}`, { ...init, headers }, e)
 }
 
 const cronTask = (overrides: Record<string, unknown> = {}) => ({
@@ -199,7 +199,7 @@ describe('settings API', () => {
   it('reads and writes the global alert target', async () => {
     const initial = await (await call('/settings/alert')).json() as { alert: { mode: string; url: string; bodyTemplate: string; senderTopic: string } }
     expect(initial.alert).toMatchObject({ mode: 'webhook', url: '', senderTopic: '' })
-    expect(JSON.parse(initial.alert.bodyTemplate)).toMatchObject({ title: 'cf-task: {{task.name}}', group: 'cf-task' })
+    expect(JSON.parse(initial.alert.bodyTemplate)).toMatchObject({ title: '云吉 Task: {{task.name}}', group: 'yunji-task' })
     const res = await call('/settings/alert', {
       method: 'PUT',
       body: JSON.stringify({ url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}' }),

@@ -1,5 +1,5 @@
 /**
- * The subset of cf-sender's `SenderRpc` entrypoint cf-task uses. Declared
+ * The subset of cf-sender's `SenderRpc` entrypoint yunji-task uses. Declared
  * here rather than imported so the two Workers stay independently buildable.
  */
 export interface SenderService {

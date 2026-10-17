@@ -235,7 +235,7 @@ describe('queue handler', () => {
   it('acks processed messages and retries on infrastructure errors', async () => {
     const task = await createTaskRow()
     mockFetch(() => new Response('ok'))
-    const ok = createMessageBatch<RunMessage>('cf-task-runs', [
+    const ok = createMessageBatch<RunMessage>('yunji-task-runs', [
       { id: 'm1', timestamp: new Date(), attempts: 1, body: message(task.id) },
     ])
     const ctx1 = createExecutionContext()
@@ -245,7 +245,7 @@ describe('queue handler', () => {
     const broken = Object.create(env, {
       DB: { value: { prepare: () => { throw new Error('D1 down') } } },
     }) as CloudflareBindings
-    const bad = createMessageBatch<RunMessage>('cf-task-runs', [
+    const bad = createMessageBatch<RunMessage>('yunji-task-runs', [
       { id: 'm2', timestamp: new Date(), attempts: 1, body: message(task.id) },
     ])
     const ctx2 = createExecutionContext()

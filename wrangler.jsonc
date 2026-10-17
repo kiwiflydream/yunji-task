@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cf-task",
+  "name": "yunji-task",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-16",
   "observability": {
@@ -17,8 +17,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "cf-task",
-      // Replace with the id printed by `wrangler d1 create cf-task` before deploying.
+      "database_name": "yunji-task",
+      // Replace with the id printed by `wrangler d1 create yunji-task` before deploying.
       "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
@@ -41,17 +41,17 @@
     "producers": [
       {
         "binding": "RUN_QUEUE",
-        "queue": "cf-task-runs"
+        "queue": "yunji-task-runs"
       }
     ],
     "consumers": [
       {
-        "queue": "cf-task-runs",
+        "queue": "yunji-task-runs",
         // One message per batch: a full batch is delivered immediately, so
         // second-level tasks never wait on max_batch_timeout.
         "max_batch_size": 1,
         "max_retries": 3,
-        "dead_letter_queue": "cf-task-runs-dlq"
+        "dead_letter_queue": "yunji-task-runs-dlq"
       }
     ]
   },

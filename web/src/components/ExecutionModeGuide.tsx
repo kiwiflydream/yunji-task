@@ -24,12 +24,39 @@ export function ExecutionModeGuide({ timeoutMs, taskMode, globalMode, queueAvail
           <Dialog.Close render={(props) => <Button {...props} type="button" variant="ghost" shape="square" icon={<XIcon />} aria-label="关闭指南" />} />
         </div>
         <div className="flex min-h-0 flex-col gap-6 overflow-y-auto px-5 py-5 text-sm leading-relaxed">
+          <GuideSection title="选择总结">
+            <ul className="list-disc space-y-1 pl-5">
+              <li>短接口、超时在 {WORKER_MAX_TIMEOUT_SECONDS} 秒内：先选 Worker 异步。</li>
+              <li>需要更长超时：免费版低频任务先选直接执行；付费版慢接口优先队列。</li>
+              <li>通常 1 秒内返回，但偶尔需要更长等待：直接执行也适合。</li>
+              <li>只需要接口失败后重试：三种方式都支持；还需要持久投递、消费异常重投和积压缓冲：选队列。</li>
+              <li>大多数任务同一种策略：跟随全局，特殊任务单独配置。</li>
+            </ul>
+          </GuideSection>
           <div className="rounded-lg bg-kumo-recessed p-3" aria-label="当前任务执行配置">
             <p>当前请求超时：{timeoutMs / 1000} 秒 · 全局方式：{globalMode ? MODE_LABEL[globalMode] : '加载中'}</p>
             <p>任务选择：{taskMode === 'inherit' ? '跟随全局' : MODE_LABEL[taskMode]}{effective && `，实际使用${MODE_LABEL[effective.mode]}`}。</p>
             {effective?.mode === 'worker' && timeoutMs > WORKER_MAX_TIMEOUT_SECONDS * 1000 && <p className="mt-1 font-medium">这次配置会将请求超时限制为 {WORKER_MAX_TIMEOUT_SECONDS} 秒；重试也使用 Worker 异步。</p>}
             {queueAvailable === false && <p className="mt-1 font-medium">当前部署未配置 Queue，需先绑定队列才能选择队列执行。</p>}
           </div>
+
+          <GuideSection title="直接执行与队列：除了费用，还有什么区别？">
+            <p><strong>两种方式都支持接口失败重试。</strong>请求超时、响应码或返回字段不符合成功条件时，都会按任务设置的重试次数和间隔再次执行。Worker 异步也一样，重试保持原执行方式。</p>
+            <div className="overflow-x-auto rounded-lg border border-kumo-line">
+              <table className="w-full min-w-[30rem] text-left">
+                <thead className="bg-kumo-recessed"><tr><Th>对比项</Th><Th>直接执行</Th><Th>队列执行</Th></tr></thead>
+                <tbody className="divide-y divide-kumo-line">
+                  <tr><Td>请求由谁执行</Td><Td>调度器 DO 直接请求接口</Td><Td>调度器先入队，再由独立消费者请求接口</Td></tr>
+                  <tr><Td>接口失败后的重试</Td><Td>支持，调度器保存待重试任务，到时间后执行</Td><Td>支持，到时间后通过队列执行下一次尝试</Td></tr>
+                  <tr><Td>投递与异常恢复</Td><Td>由本项目调度器安排重投，无独立消息队列</Td><Td>入队成功后持久保存；消费异常可由平台重新投递，耗尽投递重试后进入死信队列</Td></tr>
+                  <tr><Td>突发流量与积压</Td><Td>到期后直接发起执行</Td><Td>消息先在队列中等待，按消费者处理能力逐步执行；可能增加开始延迟</Td></tr>
+                  <tr><Td>优先使用场景</Td><Td>低频、链路简单、无需额外队列缓冲</Td><Td>需要独立投递保障、承受突发任务或处理积压</Td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p><strong>注意两层重试：</strong>任务设置控制“接口失败后再请求几次”；Queue 的投递重试控制“消息消费异常后再投递几次”。本项目当前将后者设为 3 次，耗尽后进入死信队列，需另行排查处理；这不会给每次 HTTP 失败额外叠加 3 次业务重试。</p>
+            <p>消息重新投递也不代表一定重新请求接口：本项目会检查执行记录，已认领的同一次尝试不会重复发起 HTTP 请求；中断后未记录结果的尝试会由巡检标记为丢失。队列不保证业务最终成功，业务接口仍应支持幂等。</p>
+          </GuideSection>
 
           <GuideSection title="先按场景选择">
             <div className="overflow-x-auto rounded-lg border border-kumo-line">
@@ -72,15 +99,6 @@ export function ExecutionModeGuide({ timeoutMs, taskMode, globalMode, queueAvail
             <p>执行方式由配置决定。超时变长或缺少 Queue 绑定时，系统不会自动换一种方式；使用 Worker 异步时，即使跟随全局任务设置了更长超时，也以 {WORKER_MAX_TIMEOUT_SECONDS} 秒为上限。</p>
           </GuideSection>
 
-          <GuideSection title="选择总结">
-            <ul className="list-disc space-y-1 pl-5">
-              <li>短接口、超时在 {WORKER_MAX_TIMEOUT_SECONDS} 秒内：先选 Worker 异步。</li>
-              <li>需要更长超时：免费版低频任务先选直接执行；付费版慢接口优先队列。</li>
-              <li>通常 1 秒内返回，但偶尔需要更长等待：直接执行也适合。</li>
-              <li>持久投递、积压缓冲更重要：选队列，并核算操作额度。</li>
-              <li>大多数任务同一种策略：跟随全局，特殊任务单独配置。</li>
-            </ul>
-          </GuideSection>
           <div className="border-t border-kumo-line pt-3 text-xs text-kumo-subtle">
             <p>额度与价格核对于 2026-10-17，以 Cloudflare 官方文档为准：</p>
             <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
@@ -88,6 +106,9 @@ export function ExecutionModeGuide({ timeoutMs, taskMode, globalMode, queueAvail
                 ['Workers 时限', 'https://developers.cloudflare.com/workers/platform/limits/'],
                 ['Workers 计费', 'https://developers.cloudflare.com/workers/platform/pricing/'],
                 ['Queues 计费', 'https://developers.cloudflare.com/queues/platform/pricing/'],
+                ['Queues 重试与确认', 'https://developers.cloudflare.com/queues/configuration/batching-retries/'],
+                ['Queues 死信队列', 'https://developers.cloudflare.com/queues/configuration/dead-letter-queues/'],
+                ['Queues 投递保障', 'https://developers.cloudflare.com/queues/reference/delivery-guarantees/'],
                 ['DO 计费', 'https://developers.cloudflare.com/durable-objects/platform/pricing/'],
               ].map(([label, href]) => <a key={href} href={href} target="_blank" rel="noreferrer" className="underline">{label}</a>)}
             </div>

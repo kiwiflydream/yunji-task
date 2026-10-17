@@ -12,7 +12,7 @@ afterEach(() => vi.restoreAllMocks())
 
 const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
 const call = (method: string, body?: unknown, e: CloudflareBindings = env) =>
-  app.request('https://cf-task.test/api/settings/runtime', {
+  app.request('https://yunji-task.test/api/settings/runtime', {
     method,
     headers: AUTH,
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -85,20 +85,20 @@ describe('runtime settings', () => {
 
   it('requires authentication for reads and writes', async () => {
     for (const method of ['GET', 'PUT']) {
-      const res = await app.request('https://cf-task.test/api/settings/runtime', { method }, env)
+      const res = await app.request('https://yunji-task.test/api/settings/runtime', { method }, env)
       expect(res.status).toBe(401)
     }
   })
 
   it('shares the same settings with the authenticated admin API', async () => {
     const authorization = `Basic ${btoa(`admin:${env.ADMIN_PASSWORD}`)}`
-    const res = await app.request('https://cf-task.test/admin/api/settings/runtime', {
+    const res = await app.request('https://yunji-task.test/admin/api/settings/runtime', {
       method: 'PUT',
       headers: { authorization, 'content-type': 'application/json' },
       body: JSON.stringify(saved),
     }, env)
     expect(res.status).toBe(200)
-    const me = await app.request('https://cf-task.test/admin/api/me', { headers: { authorization } }, env)
+    const me = await app.request('https://yunji-task.test/admin/api/me', { headers: { authorization } }, env)
     expect(await me.json()).toMatchObject(saved)
     expect(await (await call('GET')).json()).toEqual({ settings: saved })
   })

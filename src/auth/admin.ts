@@ -6,7 +6,7 @@ import { checkBasicCredentials } from './basic'
 export type AdminVariables = { adminUser: string }
 
 export const DEFAULT_ADMIN_USERNAME = 'admin'
-const REALM = 'cf-task'
+const REALM = 'yunji-task'
 
 /**
  * Protect the admin UI. ADMIN_AUTH_MODE selects the scheme:

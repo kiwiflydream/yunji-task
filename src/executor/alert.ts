@@ -76,7 +76,7 @@ export function senderAlertMessage(task: AlertTask, run: FailedRun) {
       .join('\n'),
     format: 'markdown' as const,
     level: 'error' as const,
-    tags: ['cf-task'],
+    tags: ['yunji-task'],
   }
 }
 
@@ -88,7 +88,7 @@ export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask,
     const sender = senderService(env)
     if (!sender) throw new Error('alert targets cf-sender but the SENDER service binding is not configured (see wrangler.jsonc "services")')
     // The key makes outbox retries safe: cf-sender returns the first message instead of sending again.
-    await sender.send({ topic: target.topic, ...senderAlertMessage(task, run) }, { idempotencyKey: `cf-task:alert:${run.id}` })
+    await sender.send({ topic: target.topic, ...senderAlertMessage(task, run) }, { idempotencyKey: `yunji-task:alert:${run.id}` })
     return
   }
   await sendWebhookAlert(env, target, task, run)

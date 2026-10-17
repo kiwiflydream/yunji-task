@@ -175,7 +175,7 @@ describe('direct mode', () => {
     await setRuntimeSettings({ executionMode: 'direct' })
     const e = Object.create(env, { RUN_QUEUE: { value: noQueue } })
     const res = await app.request(
-      `http://cf-task.test/api/tasks/${task.id}/trigger`,
+      `http://yunji-task.test/api/tasks/${task.id}/trigger`,
       { method: 'POST', headers: { authorization: `Bearer ${env.API_TOKEN}` } },
       e,
     )

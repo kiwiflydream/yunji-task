@@ -1,5 +1,5 @@
 {
-  "name": "cf-task",
+  "name": "yunji-task",
   "type": "module",
   "scripts": {
     "dev": "vite dev",

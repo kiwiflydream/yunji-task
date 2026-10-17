@@ -309,7 +309,7 @@ describe('stats accumulation', () => {
 
 describe('stats API', () => {
   const AUTH = { authorization: `Bearer ${env.API_TOKEN}` }
-  const get = (path: string) => app.request(`http://cf-task.test/api${path}`, { headers: AUTH }, env)
+  const get = (path: string) => app.request(`http://yunji-task.test/api${path}`, { headers: AUTH }, env)
 
   beforeEach(async () => {
     await env.DB.batch([env.DB.prepare('DELETE FROM run_stats_hourly'), env.DB.prepare('DELETE FROM runs')])

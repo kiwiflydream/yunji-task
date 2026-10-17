@@ -1,6 +1,6 @@
-# cf-task
+# 云吉 Task（Yunji Task）
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/YOUR_USERNAME/cf-task)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/YOUR_USERNAME/yunji-task)
 
 运行在 Cloudflare 上的轻量定时任务系统：秒级 cron / 一次性 / 手动触发，HTTP 执行器，失败重试与告警，执行统计图表，[Kumo](https://github.com/cloudflare/kumo) 管理后台 + REST API。设计见 [docs/design.md](docs/design.md)。
 
@@ -34,7 +34,7 @@ pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.
 
 ### 一键部署
 
-项目尚未发布到 GitHub，顶部按钮中的 `https://github.com/YOUR_USERNAME/cf-task` 是占位地址。发布为公开仓库后，将它替换为实际仓库地址，按钮即可直接导入本项目。
+项目尚未发布到 GitHub，顶部按钮中的 `https://github.com/YOUR_USERNAME/yunji-task` 是占位地址。发布为公开仓库后，将它替换为实际仓库地址，按钮即可直接导入本项目。
 
 点击顶部按钮，按以下步骤部署。流程见 [Cloudflare 官方文档](https://developers.cloudflare.com/workers/platform/deploy-buttons/)。
 
@@ -53,9 +53,9 @@ pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.
 ### 命令行部署
 
 ```sh
-wrangler d1 create cf-task              # 把输出的 database_id 填进 wrangler.jsonc
-wrangler queues create cf-task-runs     # 不用队列方式时不需要这两个队列
-wrangler queues create cf-task-runs-dlq
+wrangler d1 create yunji-task              # 把输出的 database_id 填进 wrangler.jsonc
+wrangler queues create yunji-task-runs     # 不用队列方式时不需要这两个队列
+wrangler queues create yunji-task-runs-dlq
 wrangler secret put API_TOKEN           # 任意强随机字符串
 wrangler secret put ENCRYPTION_KEY      # openssl rand -base64 32；丢失后已存变量无法解密
 wrangler secret put ADMIN_PASSWORD      # 后台 basic 认证密码
@@ -152,7 +152,7 @@ pnpm deploy                             # 构建、执行 D1 迁移并发布 Wor
 
 最终失败告警也先持久化，再由独立 Worker 发送，不占用任务请求的 25 秒上限所在的后台执行窗口。告警目标和模板取失败时的配置；单次发送最多 10 秒，失败后间隔 30、60 秒重试，最多发送 3 次。中断后的投递由每 5 分钟的维护任务恢复。投递采用至少一次语义：发送成功但确认写入前中断时，可能重复，接收端可按 `run.id` 去重。
 
-**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置 → 全局失败告警」选择「CF Sender」并填写主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `cf-task:alert:<run.id>` 幂等键，重试不会重复发送。全局告警方式可明确选择 Webhook、CF Sender 或关闭，按所选方式发送；缺少 SENDER 绑定时会明确失败。Webhook 默认提供 [Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md) JSON 模板，推送地址可填写 `https://api.day.app/{{BARK_KEY}}`，并在「变量」中保存 `BARK_KEY`。
+**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置 → 全局失败告警」选择「CF Sender」并填写主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `yunji-task:alert:<run.id>` 幂等键，重试不会重复发送。全局告警方式可明确选择 Webhook、CF Sender 或关闭，按所选方式发送；缺少 SENDER 绑定时会明确失败。Webhook 默认提供 [Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md) JSON 模板，推送地址可填写 `https://api.day.app/{{BARK_KEY}}`，并在「变量」中保存 `BARK_KEY`。
 
 **成功判定**：创建或编辑任务时，可以选择简单模式或高级模式。简单模式要求 HTTP 2xx，填写成功关键字后还需响应体包含该字符串。高级模式支持响应码等于／不等于／范围、响应正文等于／包含，以及 JSON 字段的等于、包含、大小比较、存在性判断；多个条件可选「全部满足（AND）」或「任一满足（OR）」。高级模式只按所配置的条件判断，若需要限定 2xx，请保留默认的响应码 200–299 条件。
 
@@ -225,7 +225,7 @@ Paid 套餐每月 $5 起，额度按月计算，超出后按量计费。执行�
 - **计费有两点待确认**：DO 调用 Worker 是否算一次 Worker 请求（上面按算来估），以及 Worker 后台等待是否确实只按 CPU 计费（Workers 的计费规则是这样，但官方文档没有专门说明这种情况）。部署后请在 Cloudflare 后台核对用量。
 - **部署时**：Worker 异步和直接执行的请求都在后台进行，部署或运行时更新时可能被中断，15 分钟内由对账任务标记为失败。队列方式下 Worker 也可能被中断，结果相同，只是更少见。不希望部署打断执行的长任务，选队列更稳。
 - **没有配置 Queue 时**：保存任务时选「队列」会被拒绝；已有任务执行时缺少 Queue 绑定会明确报错，不会自动切换执行方式。
-- **额度按账号共享**：同一个 Cloudflare 账号下所有 Workers 项目共用这些额度，上面的估算假设只有 cf-task 在用。维护任务每 5 分钟只补同步未成功的任务版本，每小时全量对账修复丢失的 alarm（100 个稳定任务每月约 7.2 万次 DO 对账请求，另加修改、重试投递和告警的请求）。
+- **额度按账号共享**：同一个 Cloudflare 账号下所有 Workers 项目共用这些额度，上面的估算假设只有云吉 Task 在用。维护任务每 5 分钟只补同步未成功的任务版本，每小时全量对账修复丢失的 alarm（100 个稳定任务每月约 7.2 万次 DO 对账请求，另加修改、重试投递和告警的请求）。
 
 ## API 速查
 

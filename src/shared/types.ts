@@ -50,9 +50,9 @@ export interface AlertSettings {
 }
 
 export const BARK_ALERT_TEMPLATE = JSON.stringify({
-  title: 'cf-task: {{task.name}}',
+  title: '云吉 Task: {{task.name}}',
   body: '{{run.error}}\nHTTP {{run.http_status}} | #{{run.attempt}} | {{run.finished_at}}',
-  group: 'cf-task',
+  group: 'yunji-task',
 }, null, 2)
 
 export interface Issue {

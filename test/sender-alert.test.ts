@@ -82,8 +82,8 @@ describe('sendFailureAlert via cf-sender', () => {
     await sendFailureAlert(e, { id: 'task-1', name: '夜间同步', alert: { mode: 'sender', topic: 'ops-alert' } }, run)
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(calls).toHaveLength(1)
-    expect(calls[0].options).toEqual({ idempotencyKey: 'cf-task:alert:run-1' })
-    expect(calls[0].input).toMatchObject({ topic: 'ops-alert', title: '任务失败：夜间同步', format: 'markdown', level: 'error', tags: ['cf-task'] })
+    expect(calls[0].options).toEqual({ idempotencyKey: 'yunji-task:alert:run-1' })
+    expect(calls[0].input).toMatchObject({ topic: 'ops-alert', title: '任务失败：夜间同步', format: 'markdown', level: 'error', tags: ['yunji-task'] })
     expect(calls[0].input.body).toContain("- 错误：`HTTP 502 'bad' gateway`")
     expect(calls[0].input.body).toContain('- HTTP 状态：502')
     expect(calls[0].input.body).toContain('- 第 2 次尝试 · 定时触发')
@@ -151,7 +151,7 @@ describe('validation and UI mapping', () => {
     await sendFailureAlert(env, { id: 't', name: '夜间"同步"', alert: { mode: 'inherit' } }, { ...run, error: 'bad "response"\nnext line' })
     expect(request).toEqual({
       url: 'https://api.day.app/test-key', method: 'POST', contentType: 'application/json',
-      body: { title: 'cf-task: 夜间"同步"', body: 'bad "response"\nnext line\nHTTP 502 | #2 | 2026-10-17T01:02:03.000Z', group: 'cf-task' },
+      body: { title: '云吉 Task: 夜间"同步"', body: 'bad "response"\nnext line\nHTTP 502 | #2 | 2026-10-17T01:02:03.000Z', group: 'yunji-task' },
     })
   })
 

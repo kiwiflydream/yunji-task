@@ -1,4 +1,4 @@
-# cf-task 设计
+# 云吉 Task（Yunji Task）设计
 
 运行在 Cloudflare 上的轻量定时任务系统（cf 版 xxl-job / 青龙的简化版）。单管理员自用，几十到几百个任务，支持秒级调度。
 
@@ -12,7 +12,7 @@
             └──────┼────────────────────────────────────┘
                    ▼
    TaskScheduler DO（每个任务一个，id = taskId）
-     alarm() ─ 计算下次触发并 setAlarm ─ 投递 RunMessage ──► Queue cf-task-runs
+     alarm() ─ 计算下次触发并 setAlarm ─ 投递 RunMessage ──► Queue yunji-task-runs
                                                               │
    Queue consumer（同一个 Worker） ◄─────────────────────────┘
      抢占 run → 执行器(HTTP) → 判定成功 → 写 runs / 重试(delaySeconds) / 告警
@@ -34,7 +34,7 @@
 | 失败处理 | 重试次数 0–10、间隔 1–3600 秒；结果与重试动作在同一 D1 事务中提交，按原方式投递，投递失败可恢复 |
 | 成功判定 | 简单模式为 2xx 且（可选）包含关键字，扫描前 1 MiB。高级模式配置 `successCondition`，最多 20 条响应码／正文／JSON 字段规则，以 AND 或 OR 组合，取代简单模式条件；正文与 JSON 规则要求完整响应不超过 1 MiB，字段值严格区分类型，缺失不等于 null |
 | 密钥 | `variables` 表，AES-GCM 加密（主密钥 `ENCRYPTION_KEY`，AAD = 变量名）。请求 URL / headers / body 与告警 URL 中用 `{{NAME}}` 引用；日志里出现的明文会被替换为 `***` |
-| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom` / `sender`。`sender` 和全局 `senderTopic` 经 Service Binding `SENDER` 调 cf-sender 的 `send()`，带 `cf-task:alert:<run.id>` 幂等键；全局 `mode` 明确选择 `webhook` / `sender` / `off`，按所选方式发送，缺少绑定时明确失败。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。全局 Webhook 默认提供 Bark JSON 模板；Body 模板留空则 POST 固定结构事件 JSON。可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
+| 告警 | 全局默认（settings 表）+ 每任务 `inherit` / `off` / `custom` / `sender`。`sender` 和全局 `senderTopic` 经 Service Binding `SENDER` 调 cf-sender 的 `send()`，带 `yunji-task:alert:<run.id>` 幂等键；全局 `mode` 明确选择 `webhook` / `sender` / `off`，按所选方式发送，缺少绑定时明确失败。失败时保存目标与模板，由独立 Worker 发送，单次最多 10 秒，失败后间隔 30、60 秒重试，最多 3 次。全局 Webhook 默认提供 Bark JSON 模板；Body 模板留空则 POST 固定结构事件 JSON。可写 body 模板，内置变量 `{{task.id}} {{task.name}} {{run.id}} {{run.status}} {{run.attempt}} {{run.trigger}} {{run.http_status}} {{run.error}} {{run.finished_at}}`，值做 JSON 字符串转义 |
 | 日志 | 每次执行一行 `runs`，保存最后一次尝试的实际方式与生效超时。响应体截断 4 KiB；没有正文校验时只读取 4 KiB + 1 字节，高级正文／JSON 条件最多读取 1 MiB + 1 字节用于判断是否超限，保留天数在设置页配置（默认 30） |
 | 统计 | 写入时预聚合到 `run_stats_hourly`（任务 × 小时），保留天数在设置页配置（默认 90），与日志保留互相独立。详见下文「统计」 |
 | 真相源 | D1。所有写操作 `version + 1` 后 sync 到 DO；DO 拒绝更旧的 version。每 5 分钟补同步未成功的版本，每小时全量对账修复 alarm |
