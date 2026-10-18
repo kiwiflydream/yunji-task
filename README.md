@@ -69,7 +69,7 @@ pnpm exec wrangler secret put ENCRYPTION_KEY
 ### 5. 部署并打开后台
 
 ```sh
-pnpm deploy
+pnpm run deploy
 ```
 
 此命令会构建前后端、应用尚未执行的 D1 迁移，再发布 Worker。部署完成后，打开输出地址的 `/admin`，使用 `admin` 和刚设置的 `ADMIN_PASSWORD` 登录。

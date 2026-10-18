@@ -20,7 +20,7 @@ pnpm dev
 
 打开 `http://localhost:5173/admin`，使用 `admin` 和 `.dev.vars` 中的 `ADMIN_PASSWORD` 登录。端口被占用时，以 Vite 输出地址为准。本地开发无需 Cloudflare 登录，也无需预先创建线上数据库或队列。
 
-`.dev.vars` 和 `.wrangler` 已被 Git 忽略，不要把真实密钥加入版本管理。本地迁移作用于本地 D1，线上部署通过 `pnpm deploy` 应用远端迁移。
+`.dev.vars` 和 `.wrangler` 已被 Git 忽略，不要把真实密钥加入版本管理。本地迁移作用于本地 D1，线上部署通过 `pnpm run deploy` 应用远端迁移。
 
 ## 验证命令
 
