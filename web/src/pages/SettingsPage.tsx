@@ -4,33 +4,28 @@ import { Button, Input, InputArea, LayerCard, Radio, Text, useKumoToastManager }
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { BARK_ALERT_TEMPLATE, type AdminMe, type AlertSettings, type RuntimeSettings } from '../../../src/shared/types'
-import { api, ApiError, errorMessage } from '../api'
+import { api, ApiError, errorMessage, type VersionedAlertSettings } from '../api'
 import { DescriptionList } from '../components/DescriptionList'
 import { AlertTemplateHelp } from '../components/AlertTemplateHelp'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner, PageLoader } from '../components/States'
+import { FORM_CONFLICT_MESSAGE, useVersionedForm } from '../lib/versioned-form'
 
 export function SettingsPage() {
   useLocale()
 
-  const alert = useQuery({ queryKey: ['alert'], queryFn: api.alert })
-  const me = useQuery({ queryKey: ['me'], queryFn: api.me })
+  const alert = useQuery({ queryKey: ['alert'], queryFn: api.alert, refetchOnMount: 'always', staleTime: 0 })
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchOnMount: 'always', staleTime: 0 })
   return (
     <>
       <PageHeader title={tr("设置")} />
       <div className="flex flex-col gap-4">
-        {me.isPending ? (
-          <PageLoader />
-        ) : me.isError ? (
-          <ErrorBanner error={me.error} />
-        ) : (
+        {me.isError && <ErrorBanner error={me.error} />}
+        {!me.isFetchedAfterMount && !me.isError ? <PageLoader /> : me.data && (
           <RuntimeSettingsForm initial={me.data} />
         )}
-        {alert.isPending ? (
-          <PageLoader />
-        ) : alert.isError ? (
-          <ErrorBanner error={alert.error} />
-        ) : (
+        {alert.isError && <ErrorBanner error={alert.error} />}
+        {!alert.isFetchedAfterMount && !alert.isError ? <PageLoader /> : alert.data && (
           <AlertForm initial={alert.data} senderAvailable={me.data?.senderAvailable ?? false} />
         )}
         <LayerCard>
@@ -62,9 +57,15 @@ export function SettingsPage() {
 function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
   useLocale()
 
-  const [mode, setMode] = useState(initial.executionMode)
-  const [retentionDays, setRetentionDays] = useState(String(initial.retentionDays))
-  const [statsRetentionDays, setStatsRetentionDays] = useState(String(initial.statsRetentionDays))
+  const { value: form, setValue: setForm, version, conflict, reset } = useVersionedForm({
+    mode: initial.executionMode,
+    retentionDays: String(initial.retentionDays),
+    statsRetentionDays: String(initial.statsRetentionDays),
+  }, initial.runtimeSettingsVersion)
+  const { mode, retentionDays, statsRetentionDays } = form
+  const setMode = (mode: RuntimeSettings['executionMode']) => setForm((previous) => ({ ...previous, mode }))
+  const setRetentionDays = (retentionDays: string) => setForm((previous) => ({ ...previous, retentionDays }))
+  const setStatsRetentionDays = (statsRetentionDays: string) => setForm((previous) => ({ ...previous, statsRetentionDays }))
   const [errors, setErrors] = useState<Partial<Record<keyof RuntimeSettings, string>>>({})
   const [error, setError] = useState<string | null>(null)
   const toasts = useKumoToastManager()
@@ -74,12 +75,10 @@ function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
       executionMode: mode,
       retentionDays: Number(retentionDays),
       statsRetentionDays: Number(statsRetentionDays),
-    }),
-    onSuccess: (saved) => {
-      qc.setQueryData<AdminMe>(['me'], (previous) => previous ? { ...previous, ...saved } : previous)
-      setMode(saved.executionMode)
-      setRetentionDays(String(saved.retentionDays))
-      setStatsRetentionDays(String(saved.statsRetentionDays))
+    }, version),
+    onSuccess: ({ settings, version: savedVersion }) => {
+      qc.setQueryData<AdminMe>(['me'], (previous) => previous ? { ...previous, ...settings, runtimeSettingsVersion: savedVersion } : previous)
+      reset({ mode: settings.executionMode, retentionDays: String(settings.retentionDays), statsRetentionDays: String(settings.statsRetentionDays) }, savedVersion)
       setErrors({})
       setError(null)
       toasts.add({ title: tr("运行设置已保存"), variant: 'success' })
@@ -94,7 +93,8 @@ function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
         }
       }
       setErrors(fields)
-      setError(Object.keys(fields).length ? tr("保存失败，请检查标出的字段。") : errorMessage(err))
+      setError(err instanceof ApiError && err.status === 409 ? tr(FORM_CONFLICT_MESSAGE)
+        : Object.keys(fields).length ? tr("保存失败，请检查标出的字段。") : errorMessage(err))
     },
   })
   return (
@@ -163,6 +163,7 @@ function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
           </div>
           <Text size="sm" variant="secondary">
             {tr("保留天数由下一轮清理任务使用（每 5 分钟一次）。缩短天数会清理更早的数据，调大天数不会恢复已删除的数据。")}</Text>
+          {conflict && !error && <Text size="sm" variant="error">{tr(FORM_CONFLICT_MESSAGE)}</Text>}
           {error && <Text size="sm" variant="error">{localizeIssueMessage(error)}</Text>}
           <div>
             <Button type="submit" variant="primary" loading={save.isPending}>{tr("保存运行设置")}</Button>
@@ -173,19 +174,21 @@ function RuntimeSettingsForm({ initial }: { initial: AdminMe }) {
   )
 }
 
-function AlertForm({ initial, senderAvailable }: { initial: AlertSettings; senderAvailable: boolean }) {
+function AlertForm({ initial, senderAvailable }: { initial: VersionedAlertSettings; senderAvailable: boolean }) {
   useLocale()
 
-  const [form, setForm] = useState(initial)
+  const { value: form, setValue: setForm, version, conflict, reset } = useVersionedForm<AlertSettings>({
+    mode: initial.mode, url: initial.url, bodyTemplate: initial.bodyTemplate, senderTopic: initial.senderTopic,
+  }, initial.version)
   const [error, setError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof AlertSettings, string>>>({})
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
   const save = useMutation({
-    mutationFn: () => api.putAlert(form),
+    mutationFn: () => api.putAlert(form, version),
     onSuccess: (saved) => {
       qc.setQueryData(['alert'], saved)
-      setForm(saved)
+      reset({ mode: saved.mode, url: saved.url, bodyTemplate: saved.bodyTemplate, senderTopic: saved.senderTopic }, saved.version)
       setError(null)
       setFieldErrors({})
       toasts.add({ title: tr("告警设置已保存"), variant: 'success' })
@@ -200,7 +203,8 @@ function AlertForm({ initial, senderAvailable }: { initial: AlertSettings; sende
         }
       }
       setFieldErrors(fields)
-      setError(Object.keys(fields).length ? tr("保存失败，请检查标出的字段。") : errorMessage(err))
+      setError(err instanceof ApiError && err.status === 409 ? tr(FORM_CONFLICT_MESSAGE)
+        : Object.keys(fields).length ? tr("保存失败，请检查标出的字段。") : errorMessage(err))
     },
   })
   return (
@@ -274,6 +278,7 @@ function AlertForm({ initial, senderAvailable }: { initial: AlertSettings; sende
               </div>
             </>
           )}
+          {conflict && !error && <Text size="sm" variant="error">{tr(FORM_CONFLICT_MESSAGE)}</Text>}
           {error && <Text size="sm" variant="error">{localizeIssueMessage(error)}</Text>}
           <div>
             <Button type="submit" variant="primary" loading={save.isPending}>{tr("保存")}</Button>

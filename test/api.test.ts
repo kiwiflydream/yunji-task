@@ -227,6 +227,7 @@ describe('settings API', () => {
     expect(res.status).toBe(200)
     expect(await (await call('/settings/alert')).json()).toEqual({
       alert: { mode: 'webhook', url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderTopic: '' },
+      version: 1,
     })
   })
 })

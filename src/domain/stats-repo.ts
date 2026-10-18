@@ -1,4 +1,4 @@
-import { BUCKET_COUNT, bucketIndex, emptyAgg, floorMinute, MINUTE_MS, HOUR_MS, type Agg, type StatsWindow } from './stats'
+import { BUCKET_COUNT, bucketIndex, emptyAgg, MINUTE_MS, HOUR_MS, type Agg, type StatsWindow } from './stats'
 
 const BUCKET_COLS = Array.from({ length: BUCKET_COUNT }, (_, i) => `dur_b${i}`)
 const SUM_COLS = ['success', 'failed', 'skipped', 'duration_count', 'duration_sum', ...BUCKET_COLS, 'delay_count', 'delay_sum']
@@ -51,10 +51,12 @@ export function finalOutcomeStatement(
     .bind(outcome === 'success' ? 1 : 0, outcome === 'failed' ? 1 : 0, durationMs, durationMs, ...buckets, runId)
 }
 
-export function skippedStatement(db: D1Database, taskId: string, scheduledAt: number): D1PreparedStatement {
+/** Batch after inserting this skipped run; a deleted task produces no run and no stats. */
+export function skippedStatement(db: D1Database, runId: string): D1PreparedStatement {
   return db
-    .prepare(`INSERT INTO run_stats (task_id, bucket, skipped) VALUES (?, ?, 1) ${ON_CONFLICT}`)
-    .bind(taskId, floorMinute(scheduledAt))
+    .prepare(`INSERT INTO run_stats (task_id, bucket, skipped)
+      SELECT task_id, ${BUCKET_OF_SCHEDULED}, 1 FROM runs WHERE id = ? AND status = 'skipped' ${ON_CONFLICT}`)
+    .bind(runId)
 }
 
 /**

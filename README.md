@@ -85,7 +85,7 @@ pnpm deploy                             # 构建、执行 D1 迁移并发布 Wor
 | 日志保留天数 | 30 | 1–3650 天，下一轮清理使用 |
 | 统计保留天数 | 90 | 1–3650 天，与日志独立，下一轮清理使用 |
 
-运行配置只有 D1 中这一处来源；未保存时使用上表默认值。API：`GET /api/settings/runtime`、`PUT /api/settings/runtime`，配置字段为 `executionMode`、`retentionDays`、`statsRetentionDays`，PUT 需要提交完整配置；后台对应 `/admin/api/settings/runtime`。保存队列方式前会检查 Queue 绑定，非法配置返回 422，不覆盖原值。调度器在每次新触发时读取最新配置，不等待每 5 分钟的对账；保留天数由每 5 分钟的清理任务读取，调大天数不会恢复已删除的数据。
+运行配置只有 D1 中这一处来源；未保存时使用上表默认值。API：`GET /api/settings/runtime`、`PUT /api/settings/runtime`，配置字段为 `executionMode`、`retentionDays`、`statsRetentionDays`，PUT 需要提交完整配置；后台对应 `/admin/api/settings/runtime`。响应同时返回 `version`，未保存时为 0。后台保存会校验编辑时的版本，遇到其他页面或 API 的更新会提示冲突，保留未保存内容。保存队列方式前会检查 Queue 绑定，非法配置返回 422，不覆盖原值。调度器在每次新触发时读取最新配置，不等待每 5 分钟的对账；保留天数由每 5 分钟的清理任务读取，调大天数不会恢复已删除的数据。
 
 后台默认使用 basic 认证；没设置 `ADMIN_PASSWORD` 时 `/admin` 返回 503。改用 Cloudflare Access：在 Zero Trust 中为 `<你的域名>/admin` 创建 Self-hosted 应用，把 `ADMIN_AUTH_MODE` 设为 `access`，填入团队域名（如 `myteam.cloudflareaccess.com`）和应用的 AUD tag 后重新部署。`/api` 不受这两种方式影响，始终用 `Authorization: Bearer $API_TOKEN`。
 
@@ -244,13 +244,15 @@ Paid 套餐每月 $5 起，额度按月计算，超出后按量计费。执行�
 | POST | `/api/tasks/:id/enable` · `/disable` · `/trigger` | 启用 / 停用 / 手动触发 |
 | GET | `/api/tasks/:id/runs?limit=50&before=<nextBefore>` | 执行记录（分页；将上页返回的 `nextBefore` URL 编码后原样传回，包含时间戳与 ID） |
 | GET | `/api/runs/:id` | 单次执行 |
-| GET · PUT · DELETE | `/api/variables` · `/api/variables/:name` | 加密变量（值不返回） |
+| GET · POST · PUT · DELETE | `/api/variables` · `/api/variables/:name` | 列表／创建／更新／删除加密变量（值不返回）；POST 同名返回 409，PUT 保留创建或更新语义 |
 | GET · PUT | `/api/settings/alert` | 全局告警 |
 | GET · PUT | `/api/settings/runtime` | 全局执行方式、日志与统计保留天数 |
 | GET | `/api/stats/overview?range=24h\|7d\|30d\|90d&tz=Asia/Shanghai` | 全局统计：汇总、时间序列、失败最多 / 最慢的任务 |
 | GET | `/api/tasks/:id/stats?range=…&tz=…` | 单任务统计，附耗时分布 |
 
 统计按 UTC 分钟预聚合，查询时在数据库内合并成小时或当地自然日，支持半小时、45 分钟及固定分钟偏移的时区；不依赖执行日志是否仍保留。每个有执行结果的任务／分钟最多一条统计行，图表返回点数不增加。高频任务的统计存储和查询扫描量最多为原小时聚合的 60 倍，可在设置页调整统计保留天数；每条执行仍只更新一条聚合记录，每个任务在该分钟首次写入统计时多写一条时间索引。
+
+任务详情和全局运行／告警设置的 GET、PUT 响应包含 `ETag`。更新时可将读取到的值原样放入 `If-Match`（例如 `If-Match: "2"`），版本不一致返回 409，保留当前配置。任务使用 `task.version`，运行／告警设置使用响应顶层的 `version`；后台自动发送此条件。未带 `If-Match` 的 REST 更新仍按原有全量覆盖方式执行，脚本存在并发写入时应使用版本条件。
 
 ```sh
 curl -X POST https://<host>/api/tasks -H "Authorization: Bearer $API_TOKEN" -H 'content-type: application/json' -d '{

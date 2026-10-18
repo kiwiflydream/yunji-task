@@ -2,13 +2,13 @@ import { Hono } from 'hono'
 import { z } from 'zod'
 import { requireApiToken } from '../auth/api-token'
 import { getRun, listRuns } from '../domain/runs-repo'
-import { alertSettingsSchema, getAlertSettings, getRuntimeSettings, putAlertSettings, putRuntimeSettings, runtimeSettingsSchema } from '../domain/settings'
+import { alertSettingsSchema, getAlertSettingsState, getRuntimeSettingsState, putAlertSettings, putRuntimeSettings, runtimeSettingsSchema } from '../domain/settings'
 import { hasRunQueue } from '../executor/mode'
 import type { Task } from '../domain/task'
 import * as service from '../domain/task-service'
-import { ValidationError, zodIssues } from '../domain/task-service'
+import { ConflictError, ValidationError, zodIssues } from '../domain/task-service'
 import { getTask, listTasks } from '../domain/tasks-repo'
-import { deleteVariable, listVariables, upsertVariable } from '../domain/variables'
+import { createVariable, deleteVariable, listVariables, upsertVariable } from '../domain/variables'
 import { VARIABLE_NAME_RE } from '../lib/template'
 import { isValidTimezone } from '../lib/time'
 import type { StatsOverview, TaskStats } from '../shared/types'
@@ -65,6 +65,15 @@ async function jsonBody(req: Request): Promise<unknown> {
   }
 }
 
+function expectedVersion(request: Request): number | undefined {
+  const header = request.headers.get('if-match')
+  if (header === null) return undefined
+  const match = /^"(0|[1-9]\d*)"$/.exec(header)
+  const version = match ? Number(match[1]) : NaN
+  if (!Number.isSafeInteger(version)) throw new ValidationError([{ path: 'If-Match', message: 'If-Match 必须是双引号包围的整数版本号' }])
+  return version
+}
+
 /**
  * Task/run/variable/settings JSON routes without authentication. Mounted at
  * /api (Bearer token) and /admin/api (admin auth).
@@ -73,6 +82,7 @@ export const apiRoutes = new Hono<{ Bindings: CloudflareBindings }>()
 
 apiRoutes.onError((err, c) => {
   if (err instanceof ValidationError) return c.json({ error: 'validation_failed', issues: err.issues }, 422)
+  if (err instanceof ConflictError) return c.json({ error: 'conflict', message: err.message }, 409)
   console.error('api error', err)
   return c.json({ error: 'internal_error' }, 500)
 })
@@ -87,16 +97,19 @@ apiRoutes.get('/tasks', async (c) => {
 
 apiRoutes.post('/tasks', async (c) => {
   const task = await service.createTask(c.env, await jsonBody(c.req.raw))
+  c.header('etag', `"${task.version}"`)
   return c.json({ task: present(task) }, 201)
 })
 
 apiRoutes.get('/tasks/:id', async (c) => {
   const task = await getTask(c.env.DB, c.req.param('id'))
+  if (task) c.header('etag', `"${task.version}"`)
   return task ? c.json({ task: present(task) }) : c.json({ error: 'not_found' }, 404)
 })
 
 apiRoutes.put('/tasks/:id', async (c) => {
-  const task = await service.updateTask(c.env, c.req.param('id'), await jsonBody(c.req.raw))
+  const task = await service.updateTask(c.env, c.req.param('id'), await jsonBody(c.req.raw), expectedVersion(c.req.raw))
+  if (task) c.header('etag', `"${task.version}"`)
   return task ? c.json({ task: present(task) }) : c.json({ error: 'not_found' }, 404)
 })
 
@@ -159,14 +172,18 @@ apiRoutes.get('/runs/:id', async (c) => {
 
 apiRoutes.get('/variables', async (c) => c.json({ variables: await listVariables(c.env.DB) }))
 
-apiRoutes.put('/variables/:name', async (c) => {
+apiRoutes.on(['POST', 'PUT'], '/variables/:name', async (c) => {
   const name = c.req.param('name')
   if (!VARIABLE_NAME_RE.test(name)) {
     throw new ValidationError([{ path: 'name', message: '只能包含字母、数字、下划线，且不能以数字开头' }])
   }
   const body = variableBodySchema.safeParse(await jsonBody(c.req.raw))
   if (!body.success) throw new ValidationError(zodIssues(body.error))
-  await upsertVariable(c.env.DB, c.env.ENCRYPTION_KEY, { name, ...body.data }, Date.now())
+  if (c.req.method === 'POST') {
+    if (!await createVariable(c.env.DB, c.env.ENCRYPTION_KEY, { name, ...body.data }, Date.now())) {
+      throw new ConflictError('同名变量已存在，请使用更新操作。')
+    }
+  } else await upsertVariable(c.env.DB, c.env.ENCRYPTION_KEY, { name, ...body.data }, Date.now())
   return c.body(null, 204)
 })
 
@@ -175,11 +192,18 @@ apiRoutes.delete('/variables/:name', async (c) => {
   return deleted ? c.body(null, 204) : c.json({ error: 'not_found' }, 404)
 })
 
-apiRoutes.get('/settings/alert', async (c) => c.json({ alert: await getAlertSettings(c.env.DB) }))
+apiRoutes.get('/settings/alert', async (c) => {
+  const state = await getAlertSettingsState(c.env.DB)
+  c.header('cache-control', 'no-store')
+  c.header('etag', `"${state.version}"`)
+  return c.json(state)
+})
 
 apiRoutes.get('/settings/runtime', async (c) => {
+  const state = await getRuntimeSettingsState(c.env.DB)
   c.header('cache-control', 'no-store')
-  return c.json({ settings: await getRuntimeSettings(c.env.DB) })
+  c.header('etag', `"${state.version}"`)
+  return c.json(state)
 })
 
 apiRoutes.put('/settings/runtime', async (c) => {
@@ -188,15 +212,19 @@ apiRoutes.put('/settings/runtime', async (c) => {
   if (body.data.executionMode === 'queue' && !hasRunQueue(c.env)) {
     throw new ValidationError([{ path: 'executionMode', message: '当前部署没有配置 Queue，不能选择队列执行' }])
   }
-  await putRuntimeSettings(c.env.DB, body.data, Date.now())
-  return c.json({ settings: body.data })
+  const version = await putRuntimeSettings(c.env.DB, body.data, Date.now(), expectedVersion(c.req.raw))
+  if (version === null) throw new ConflictError()
+  c.header('etag', `"${version}"`)
+  return c.json({ settings: body.data, version })
 })
 
 apiRoutes.put('/settings/alert', async (c) => {
   const body = alertSettingsSchema.safeParse(await jsonBody(c.req.raw))
   if (!body.success) throw new ValidationError(zodIssues(body.error))
-  await putAlertSettings(c.env.DB, body.data, Date.now())
-  return c.json({ alert: body.data })
+  const version = await putAlertSettings(c.env.DB, body.data, Date.now(), expectedVersion(c.req.raw))
+  if (version === null) throw new ConflictError()
+  c.header('etag', `"${version}"`)
+  return c.json({ alert: body.data, version })
 })
 
 export const api = new Hono<{ Bindings: CloudflareBindings }>()

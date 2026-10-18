@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { VARIABLE_NAME_RE } from '../../../src/lib/template'
 import type { VariableInfo } from '../../../src/shared/types'
-import { api, errorMessage } from '../api'
+import { api, ApiError, errorMessage } from '../api'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { PageHeader } from '../components/PageHeader'
 import { ErrorBanner, PageLoader } from '../components/States'
@@ -158,13 +158,16 @@ function VariableDialog({
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
   const save = useMutation({
-    mutationFn: () => api.putVariable(name.trim(), value, description.trim()),
+    mutationFn: () => initial.isNew
+      ? api.createVariable(name.trim(), value, description.trim())
+      : api.putVariable(name.trim(), value, description.trim()),
     onSuccess: () => {
       toasts.add({ title: initial.isNew ? tr("变量已添加") : tr("变量已更新"), variant: 'success' })
       qc.invalidateQueries({ queryKey: ['variables'] })
       onClose()
     },
-    onError: (err) => setError({ other: errorMessage(err) }),
+    onError: (err) => setError({ other: initial.isNew && err instanceof ApiError && err.status === 409
+      ? tr('同名变量已存在，请使用更新操作。') : errorMessage(err) }),
   })
   const submit = () => {
     const next: typeof error = {}

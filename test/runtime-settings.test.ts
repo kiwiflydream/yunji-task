@@ -25,7 +25,7 @@ describe('runtime settings', () => {
     const res = await call('GET')
     expect(res.status).toBe(200)
     expect(res.headers.get('cache-control')).toBe('no-store')
-    expect(await res.json()).toEqual({ settings: DEFAULT_RUNTIME_SETTINGS })
+    expect(await res.json()).toEqual({ settings: DEFAULT_RUNTIME_SETTINGS, version: 0 })
   })
 
   it('round-trips all three settings without touching the independent alert settings', async () => {
@@ -33,8 +33,8 @@ describe('runtime settings', () => {
       .bind('{"url":"https://alert.test","bodyTemplate":""}', Date.now()).run()
     const res = await call('PUT', saved)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ settings: saved })
-    expect(await (await call('GET')).json()).toEqual({ settings: saved })
+    expect(await res.json()).toEqual({ settings: saved, version: expect.any(Number) })
+    expect(await (await call('GET')).json()).toEqual({ settings: saved, version: expect.any(Number) })
     expect(await getRuntimeSettings(env.DB)).toEqual(saved)
     const alert = await env.DB.prepare("SELECT value FROM settings WHERE key = 'alert'").first<{ value: string }>()
     expect(JSON.parse(alert!.value).url).toBe('https://alert.test')
@@ -100,7 +100,7 @@ describe('runtime settings', () => {
     expect(res.status).toBe(200)
     const me = await app.request('https://yunji-task.test/admin/api/me', { headers: { authorization } }, env)
     expect(await me.json()).toMatchObject(saved)
-    expect(await (await call('GET')).json()).toEqual({ settings: saved })
+    expect(await (await call('GET')).json()).toEqual({ settings: saved, version: expect.any(Number) })
   })
 
   it('uses newly saved modes on the same existing scheduler without resyncing or restarting', async () => {

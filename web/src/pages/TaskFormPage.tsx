@@ -32,6 +32,7 @@ import { SuccessConditionEditor } from '../components/SuccessConditionEditor'
 import { ErrorBanner, PageLoader } from '../components/States'
 import { MODE_LABEL, suggestionText, WORKER_MAX_TIMEOUT_SECONDS } from '../lib/execution-mode'
 import { fmtTime } from '../lib/format'
+import { FORM_CONFLICT_MESSAGE, useVersionedForm } from '../lib/versioned-form'
 import {
   emptyTaskForm,
   formToPayload,
@@ -44,17 +45,21 @@ import {
 } from '../lib/task-form'
 
 export function TaskFormPage({ id }: { id?: string }) {
-  const existing = useQuery({ queryKey: ['task', id], queryFn: () => api.task(id!), enabled: !!id })
-  if (id && existing.isPending) return <PageLoader />
-  if (id && existing.isError) return <ErrorBanner error={existing.error} />
-  // `initial` is read once on mount; the key remounts the form when switching tasks.
+  const existing = useQuery({ queryKey: ['task', id], queryFn: () => api.task(id!), enabled: !!id, refetchOnMount: 'always', staleTime: 0 })
+  if (id && !existing.isFetchedAfterMount && !existing.isError) return <PageLoader />
+  if (id && !existing.data) return <ErrorBanner error={existing.error} />
+  // Only switching tasks remounts the editor. Refreshes preserve dirty drafts.
   return (
-    <TaskForm
-      key={id ?? 'new'}
-      id={id}
-      initial={existing.data ? taskToForm(existing.data) : emptyTaskForm}
-      taskName={existing.data?.name}
-    />
+    <>
+      {id && existing.isError && <ErrorBanner error={existing.error} />}
+      <TaskForm
+        key={id ?? 'new'}
+        id={id}
+        initial={existing.data ? taskToForm(existing.data) : emptyTaskForm}
+        taskName={existing.data?.name}
+        version={existing.data?.version ?? 0}
+      />
+    </>
   )
 }
 
@@ -76,14 +81,14 @@ function Section({ title, description, children }: { title: string; description?
   )
 }
 
-function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormState; taskName?: string }) {
+function TaskForm({ id, initial, taskName, version }: { id?: string; initial: TaskFormState; taskName?: string; version: number }) {
   useLocale()
 
   const [, navigate] = useLocation()
   const toasts = useKumoToastManager()
   const qc = useQueryClient()
   const me = useQuery({ queryKey: ['me'], queryFn: api.me })
-  const [f, setF] = useState(initial)
+  const { value: f, setValue: setF, version: formVersion, conflict } = useVersionedForm(initial, version)
   const [errors, setErrors] = useState<Partial<Record<FormField, string>>>({})
   const [otherIssues, setOtherIssues] = useState<Issue[]>([])
 
@@ -102,7 +107,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
     mutationFn: async () => {
       const out = formToPayload(f)
       if ('issues' in out) throw new ApiError(422, { issues: out.issues })
-      return id ? api.updateTask(id, out.payload) : api.createTask(out.payload)
+      return id ? api.updateTask(id, out.payload, formVersion) : api.createTask(out.payload)
     },
     onSuccess: (task) => {
       qc.invalidateQueries({ queryKey: ['tasks'] })
@@ -111,7 +116,8 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
       navigate(`/tasks/${task.id}`)
     },
     onError: (err) => {
-      if (err instanceof ApiError && err.status === 422) showIssues(err.issues)
+      if (err instanceof ApiError && err.status === 409) setOtherIssues([{ path: '', message: tr(FORM_CONFLICT_MESSAGE) }])
+      else if (err instanceof ApiError && err.status === 422) showIssues(err.issues)
       else setOtherIssues([{ path: '', message: err instanceof Error ? err.message : String(err) }])
     },
   })
@@ -136,6 +142,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
           save.mutate()
         }}
       >
+        {conflict && <Banner variant="error" description={tr(FORM_CONFLICT_MESSAGE)} />}
         {hasErrors && (
           <Banner
             variant="error"
@@ -184,7 +191,7 @@ function TaskForm({ id, initial, taskName }: { id?: string; initial: TaskFormSta
               step={1}
               value={f.runAt}
               onChange={(e) => set('runAt', e.target.value)}
-              description={tr("按下面的时区解释")}
+              description={tr("按下方时区解释；夏令时重复时间新输入取较早时刻，未修改的已保存时间保持原时刻。")}
               {...err('runAt')}
             />
           )}

@@ -57,19 +57,19 @@ export async function insertTask(db: D1Database, input: TaskInput, now: number):
   return rowToTask(row!)
 }
 
-export async function updateTask(db: D1Database, id: string, input: TaskInput, now: number): Promise<Task | null> {
+export async function updateTask(db: D1Database, id: string, input: TaskInput, now: number, expectedVersion?: number): Promise<Task | null> {
   const c = columns(input)
   const row = await db
     .prepare(
       `UPDATE tasks SET name = ?, description = ?, enabled = ?, schedule_type = ?, cron = ?, timezone = ?, run_at = ?,
         executor_type = ?, executor_config = ?, overlap_policy = ?, retry_count = ?, retry_interval_seconds = ?,
         alert_config = ?, execution_mode = ?, version = version + 1, updated_at = ?
-       WHERE id = ? RETURNING *`,
+       WHERE id = ? AND (? IS NULL OR version = ?) RETURNING *`,
     )
     .bind(
       c.name, c.description, c.enabled, c.schedule_type, c.cron, c.timezone, c.run_at,
       c.executor_type, c.executor_config, c.overlap_policy, c.retry_count, c.retry_interval_seconds,
-      c.alert_config, c.execution_mode, now, id,
+      c.alert_config, c.execution_mode, now, id, expectedVersion ?? null, expectedVersion ?? null,
     )
     .first<TaskRow>()
   return row ? rowToTask(row) : null

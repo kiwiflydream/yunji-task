@@ -10,18 +10,31 @@ export const runtimeSettingsSchema = z.object({
 
 /** Read at each configuration boundary so API requests and existing DOs see saved changes. */
 export async function getRuntimeSettings(db: D1Database): Promise<RuntimeSettings> {
-  const row = await db.prepare(`SELECT value FROM settings WHERE key = 'runtime'`).first<{ value: string }>()
-  return row ? runtimeSettingsSchema.parse(JSON.parse(row.value)) : { ...DEFAULT_RUNTIME_SETTINGS }
+  return (await getRuntimeSettingsState(db)).settings
 }
 
-export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettings, now: number): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES ('runtime', ?, ?)
-       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    )
-    .bind(JSON.stringify(settings), now)
-    .run()
+export async function getRuntimeSettingsState(db: D1Database): Promise<{ settings: RuntimeSettings; version: number }> {
+  const row = await db.prepare(`SELECT value, version FROM settings WHERE key = 'runtime'`).first<{ value: string; version: number }>()
+  return { settings: row ? runtimeSettingsSchema.parse(JSON.parse(row.value)) : { ...DEFAULT_RUNTIME_SETTINGS }, version: row?.version ?? 0 }
+}
+
+/** A zero revision means the setting has not been saved yet. Null means a stale writer. */
+async function writeSetting(db: D1Database, key: string, value: unknown, now: number, expectedVersion?: number): Promise<number | null> {
+  const encoded = JSON.stringify(value)
+  const statement = expectedVersion === undefined
+    ? db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at,
+          version = settings.version + 1 RETURNING version`).bind(key, encoded, now)
+    : expectedVersion === 0
+      ? db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+          ON CONFLICT (key) DO NOTHING RETURNING version`).bind(key, encoded, now)
+      : db.prepare(`UPDATE settings SET value = ?, updated_at = ?, version = version + 1
+          WHERE key = ? AND version = ? RETURNING version`).bind(encoded, now, key, expectedVersion)
+  return (await statement.first<{ version: number }>())?.version ?? null
+}
+
+export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettings, now: number, expectedVersion?: number): Promise<number | null> {
+  return writeSetting(db, 'runtime', settings, now, expectedVersion)
 }
 
 export const alertSettingsSchema = z.object({
@@ -38,16 +51,14 @@ export const alertSettingsSchema = z.object({
 export type AlertSettings = z.output<typeof alertSettingsSchema>
 
 export async function getAlertSettings(db: D1Database): Promise<AlertSettings> {
-  const row = await db.prepare(`SELECT value FROM settings WHERE key = 'alert'`).first<{ value: string }>()
-  return alertSettingsSchema.parse(row ? JSON.parse(row.value) : {})
+  return (await getAlertSettingsState(db)).alert
 }
 
-export async function putAlertSettings(db: D1Database, settings: AlertSettings, now: number): Promise<void> {
-  await db
-    .prepare(
-      `INSERT INTO settings (key, value, updated_at) VALUES ('alert', ?, ?)
-       ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-    )
-    .bind(JSON.stringify(settings), now)
-    .run()
+export async function getAlertSettingsState(db: D1Database): Promise<{ alert: AlertSettings; version: number }> {
+  const row = await db.prepare(`SELECT value, version FROM settings WHERE key = 'alert'`).first<{ value: string; version: number }>()
+  return { alert: alertSettingsSchema.parse(row ? JSON.parse(row.value) : {}), version: row?.version ?? 0 }
+}
+
+export async function putAlertSettings(db: D1Database, settings: AlertSettings, now: number, expectedVersion?: number): Promise<number | null> {
+  return writeSetting(db, 'alert', settings, now, expectedVersion)
 }

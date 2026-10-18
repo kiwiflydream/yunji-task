@@ -33,6 +33,16 @@ export async function upsertVariable(
     .run()
 }
 
+/** Create-only write used by the Add dialog; never replaces an existing secret. */
+export async function createVariable(db: D1Database, key: string, v: { name: string; value: string; description: string }, now: number): Promise<boolean> {
+  const encrypted = await encryptString(key, v.value, v.name)
+  const result = await db.prepare(
+    `INSERT INTO variables (name, value_encrypted, description, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT (name) DO NOTHING`,
+  ).bind(v.name, encrypted, v.description, now, now).run()
+  return result.meta.changes > 0
+}
+
 export async function deleteVariable(db: D1Database, name: string): Promise<boolean> {
   const res = await db.prepare('DELETE FROM variables WHERE name = ?').bind(name).run()
   return res.meta.changes > 0

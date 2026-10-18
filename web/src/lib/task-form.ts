@@ -21,6 +21,9 @@ export interface TaskFormState {
   cron: string
   timezone: string
   runAt: string
+  originalRunAt: number | null
+  originalRunAtLocal: string
+  originalTimezone: string
   method: string
   url: string
   headers: HeaderRow[]
@@ -50,6 +53,9 @@ export const emptyTaskForm: TaskFormState = {
   cron: '0 */5 * * * *',
   timezone: DEFAULT_TIMEZONE,
   runAt: '',
+  originalRunAt: null,
+  originalRunAtLocal: '',
+  originalTimezone: '',
   method: 'GET',
   url: '',
   headers: [],
@@ -80,6 +86,9 @@ export function taskToForm(task: Task): TaskFormState {
     cron: s.type === 'cron' ? s.cron : emptyTaskForm.cron,
     timezone: s.timezone,
     runAt: s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : '',
+    originalRunAt: s.type === 'once' ? s.runAt : null,
+    originalRunAtLocal: s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : '',
+    originalTimezone: s.timezone,
     method: cfg.method,
     url: cfg.url,
     headers: Object.entries(cfg.headers).map(([key, value]) => ({ key, value })),
@@ -114,8 +123,9 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
   let schedule: TaskInputRaw['schedule']
   if (f.scheduleType === 'cron') schedule = { type: 'cron', cron: f.cron, timezone }
   else if (f.scheduleType === 'once') {
-    const runAt = zonedTimeToEpoch(f.runAt, timezone)
-    if (runAt === null) issues.push({ path: 'schedule.runAt', message: '请选择执行时间' })
+    const unchanged = f.originalRunAt !== null && f.runAt === f.originalRunAtLocal && timezone === f.originalTimezone
+    const runAt = unchanged ? f.originalRunAt : zonedTimeToEpoch(f.runAt, timezone)
+    if (runAt === null) issues.push({ path: 'schedule.runAt', message: f.runAt ? '执行时间无效或在所选时区不存在，请重新选择' : '请选择执行时间' })
     schedule = { type: 'once', runAt: runAt ?? 0, timezone }
   } else schedule = { type: 'manual', timezone }
 

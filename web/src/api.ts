@@ -16,6 +16,7 @@ import { viewerTimezone } from './lib/format'
 
 export type TaskView = Task & { nextRunAt: number | null }
 export type TaskSummaryView = TaskSummary & { nextRunAt: number | null }
+export type VersionedAlertSettings = AlertSettings & { version: number }
 
 export class ApiError extends Error {
   constructor(
@@ -47,6 +48,11 @@ const json = (method: string, body?: unknown): RequestInit => ({
   body: body === undefined ? undefined : JSON.stringify(body),
 })
 
+const versionedPut = (body: unknown, version: number): RequestInit => ({
+  ...json('PUT', body),
+  headers: { 'If-Match': `"${version}"` },
+})
+
 export const api = {
   me: () => request<AdminMe>('/me'),
   tasks: () => request<{ tasks: TaskSummaryView[] }>('/tasks').then((r) => r.tasks),
@@ -54,8 +60,8 @@ export const api = {
   scheduler: (id: string) =>
     request<{ scheduler: SchedulerStatus }>(`/tasks/${id}/scheduler`).then((r) => r.scheduler),
   createTask: (input: TaskInputRaw) => request<{ task: TaskView }>('/tasks', json('POST', input)).then((r) => r.task),
-  updateTask: (id: string, input: TaskInputRaw) =>
-    request<{ task: TaskView }>(`/tasks/${id}`, json('PUT', input)).then((r) => r.task),
+  updateTask: (id: string, input: TaskInputRaw, version: number) =>
+    request<{ task: TaskView }>(`/tasks/${id}`, versionedPut(input, version)).then((r) => r.task),
   deleteTask: (id: string) => request<void>(`/tasks/${id}`, json('DELETE')),
   setEnabled: (id: string, enabled: boolean) =>
     request<{ task: TaskView }>(`/tasks/${id}/${enabled ? 'enable' : 'disable'}`, json('POST')).then((r) => r.task),
@@ -70,16 +76,18 @@ export const api = {
   taskStats: (id: string, range: StatsRange) =>
     request<TaskStats>(`/tasks/${id}/stats?range=${range}&tz=${encodeURIComponent(viewerTimezone)}`),
   variables: () => request<{ variables: VariableInfo[] }>('/variables').then((r) => r.variables),
+  createVariable: (name: string, value: string, description: string) =>
+    request<void>(`/variables/${encodeURIComponent(name)}`, json('POST', { value, description })),
   putVariable: (name: string, value: string, description: string) =>
     request<void>(`/variables/${encodeURIComponent(name)}`, json('PUT', { value, description })),
   deleteVariable: (name: string) => request<void>(`/variables/${encodeURIComponent(name)}`, json('DELETE')),
-  alert: () => request<{ alert: AlertSettings }>('/settings/alert').then((r) => r.alert),
-  putAlert: (alert: AlertSettings) =>
-    request<{ alert: AlertSettings }>('/settings/alert', json('PUT', alert)).then((r) => r.alert),
-  putRuntimeSettings: (settings: RuntimeSettings) =>
-    request<{ settings: RuntimeSettings }>('/settings/runtime', json('PUT', settings)).then((r) => r.settings),
+  alert: () => request<{ alert: AlertSettings; version: number }>('/settings/alert').then((r) => ({ ...r.alert, version: r.version })),
+  putAlert: (alert: AlertSettings, version: number) =>
+    request<{ alert: AlertSettings; version: number }>('/settings/alert', versionedPut(alert, version)).then((r) => ({ ...r.alert, version: r.version })),
+  putRuntimeSettings: (settings: RuntimeSettings, version: number) =>
+    request<{ settings: RuntimeSettings; version: number }>('/settings/runtime', versionedPut(settings, version)),
 }
 
 export const errorMessage = (err: unknown) => err instanceof ApiError && err.issues.length
   ? err.issues.map((issue) => localizeIssueMessage(issue.message)).join(getLocale() === 'en' ? '; ' : '；')
-  : err instanceof Error ? err.message : String(err)
+  : err instanceof Error ? localizeIssueMessage(err.message) : String(err)

@@ -8,7 +8,7 @@ import type {
   StatsSummary,
   TaskStatsRow,
 } from '../shared/types'
-import { zonedTimeToEpoch } from '../lib/time'
+import { formatInZone, startOfZonedDay } from '../lib/time'
 
 export const STATS_RANGES = ['24h', '7d', '30d', '90d'] as const satisfies readonly StatsRange[]
 
@@ -129,9 +129,7 @@ export interface StatsWindow {
 
 /** Local calendar date (`YYYY-MM-DD`) of `epochMs` in `tz`. */
 function localDate(epochMs: number, tz: string): string {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(
-    new Date(epochMs),
-  )
+  return formatInZone(epochMs, tz).slice(0, 10)
 }
 
 /**
@@ -149,7 +147,7 @@ export function statsWindow(range: StatsRange, now: number, tz: string): StatsWi
   const [y, m, d] = localDate(now, tz).split('-').map(Number)
   const buckets = Array.from({ length: days }, (_, i) => {
     const date = new Date(Date.UTC(y, m - 1, d - (days - 1 - i))).toISOString().slice(0, 10)
-    return zonedTimeToEpoch(`${date}T00:00`, tz)!
+    return startOfZonedDay(date, tz)
   })
   return { range, granularity: 'day', from: buckets[0], to: now, buckets }
 }

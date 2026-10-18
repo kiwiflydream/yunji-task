@@ -74,6 +74,37 @@ describe('task form mapping', () => {
     expect(p.schedule).toEqual({ type: 'once', runAt: Date.parse('2099-01-02T01:30:00Z'), timezone: 'Asia/Shanghai' })
   })
 
+  it.each(['2026-11-01T06:30:00Z', '2026-11-01T05:30:00.123Z', '2026-11-01T06:30:00.456Z'])(
+    'preserves the exact once epoch when only its description changes: %s',
+    async (iso) => {
+      const runAt = Date.parse(iso)
+      const task = await createTaskRow({ schedule: { type: 'once', runAt, timezone: 'America/New_York' } })
+      const editable = taskToForm(task)
+      editable.description = 'Only description changed'
+      expect(payloadOf(editable).schedule).toEqual({ type: 'once', runAt, timezone: 'America/New_York' })
+    },
+  )
+
+  it('reinterprets edited once times and timezones, choosing the earlier instant in a fold', async () => {
+    const task = await createTaskRow({
+      schedule: { type: 'once', runAt: Date.parse('2026-11-01T06:30:00Z'), timezone: 'America/New_York' },
+    })
+    const editable = taskToForm(task)
+    expect(payloadOf({ ...editable, runAt: '2026-11-01T01:45' }).schedule).toMatchObject({ runAt: Date.parse('2026-11-01T05:45:00Z') })
+    expect(payloadOf({ ...editable, timezone: 'UTC' }).schedule).toMatchObject({ runAt: Date.parse('2026-11-01T01:30:00Z') })
+    expect(payloadOf(form({ scheduleType: 'once', timezone: 'Australia/Lord_Howe', runAt: '2026-04-05T01:45' })).schedule)
+      .toMatchObject({ runAt: Date.parse('2026-04-04T14:45:00Z') })
+  })
+
+  it.each(['2027-03-14T02:30', '2026-02-30T12:00'])(
+    'reports a field error instead of silently normalizing an impossible once time: %s',
+    (runAt) => {
+      const result = formToPayload(form({ scheduleType: 'once', timezone: 'America/New_York', runAt }))
+      expect(result).toHaveProperty('issues')
+      if ('issues' in result) expect(mapIssues(result.issues).fields.runAt).toBeTruthy()
+    },
+  )
+
   it('reports client-only problems', () => {
     expect(formToPayload(form({ scheduleType: 'once', runAt: '' }))).toEqual({
       issues: [{ path: 'schedule.runAt', message: '请选择执行时间' }],

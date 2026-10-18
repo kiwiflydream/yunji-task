@@ -42,6 +42,32 @@ describe('nextFireTime', () => {
 })
 
 describe('zoned time', () => {
+  it.each([
+    ['2027-03-14T02:30', 'America/New_York'],
+    ['2026-10-04T02:15', 'Australia/Lord_Howe'],
+    ['2026-09-06T00:00', 'America/Santiago'],
+    ['2011-12-30T12:00', 'Pacific/Apia'],
+    ...['2026-02-29T12:00', '2026-02-30T12:00', '2026-13-01T12:00', '2026-00-01T12:00',
+      '2026-01-00T12:00', '2026-01-01T24:00', '2026-01-01T12:60', '2026-01-01T12:00:60'].map((local) => [local, 'UTC']),
+    ['2026-01-01T12:00', 'Mars/Base'],
+  ])('rejects nonexistent or invalid local time %s in %s', (local, tz) => {
+    expect(zonedTimeToEpoch(local, tz)).toBeNull()
+  })
+
+  it.each([
+    ['2026-11-01T01:30', 'America/New_York', '2026-11-01T05:30:00Z'],
+    ['2026-04-05T01:45', 'Australia/Lord_Howe', '2026-04-04T14:45:00Z'],
+    ['2026-11-01T00:30', 'America/Havana', '2026-11-01T04:30:00Z'],
+    ['2026-01-02T00:10', '+05:17', '2026-01-01T18:53:00Z'],
+    ['2026-01-02T00:10', 'Pacific/Kiritimati', '2026-01-01T10:10:00Z'],
+    ['2024-02-29T12:34:56', 'UTC', '2024-02-29T12:34:56Z'],
+    ['0099-01-01T12:00', 'UTC', '0099-01-01T12:00:00Z'],
+  ])('uses a valid instant, choosing the earlier offset for %s in %s', (local, tz, iso) => {
+    const epoch = zonedTimeToEpoch(local, tz)
+    expect(epoch).toBe(Date.parse(iso))
+    expect(formatInZone(epoch!, tz).replace(' ', 'T')).toBe(local.length === 16 ? `${local}:00` : local)
+  })
+
   it('converts wall-clock time in a zone to epoch and back', () => {
     const epoch = zonedTimeToEpoch('2026-10-16T09:30', 'Asia/Shanghai')
     expect(epoch).toBe(Date.parse('2026-10-16T01:30:00Z'))

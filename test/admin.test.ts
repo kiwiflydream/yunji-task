@@ -62,6 +62,7 @@ describe('basic auth (default mode)', () => {
       authMode: 'basic',
       retentionDays: 30,
       statsRetentionDays: 90,
+      runtimeSettingsVersion: expect.any(Number),
       executionMode: 'queue',
       queueAvailable: true,
       senderAvailable: false,

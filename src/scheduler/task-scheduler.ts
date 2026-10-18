@@ -53,17 +53,23 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       await this.disableFiredOnce(snapshot)
     }
 
-    const [alarm, next] = await Promise.all([storage.getAlarm(), storage.get<number>(K_NEXT)])
-    const armed = alarm !== null && next !== undefined
-    const wantArmed = snapshot.enabled && snapshot.scheduleType !== 'manual' && !firedThisVersion
-    const strandedPending = alarm === null && ((await this.pendingRuns()).length > 0 || (await this.pendingActions()).length > 0)
-    if (current && current.version === snapshot.version && armed === wantArmed && !strandedPending) {
-      return this.status()
-    }
+    // D1 I/O above can let another sync or alarm advance state. Recheck and
+    // commit only storage work atomically; never hold the gate across D1.
+    await storage.transaction(async (txn) => {
+      const current = await txn.get<ScheduleSnapshot>(K_SNAPSHOT)
+      if (current && current.version > snapshot.version) return
+      const onceFired = await txn.get<number>(K_ONCE_FIRED)
+      const firedThisVersion = snapshot.scheduleType === 'once' && onceFired === snapshot.version
+      const [alarm, next] = await Promise.all([txn.getAlarm(), txn.get<number>(K_NEXT)])
+      const armed = alarm !== null && next !== undefined
+      const wantArmed = snapshot.enabled && snapshot.scheduleType !== 'manual' && !firedThisVersion
+      const strandedPending = alarm === null && ((await this.pendingRuns(txn)).length > 0 || (await this.pendingActions(txn)).length > 0)
+      if (current && current.version === snapshot.version && armed === wantArmed && !strandedPending) return
 
-    await storage.put(K_SNAPSHOT, snapshot)
-    await this.setNext(wantArmed ? nextFireTime(snapshot, Date.now()) : null)
-    await this.rearm()
+      await txn.put(K_SNAPSHOT, snapshot)
+      await this.setNext(wantArmed ? nextFireTime(snapshot, Date.now()) : null, txn)
+      await this.rearm(txn)
+    })
     return this.status()
   }
 
@@ -133,8 +139,18 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
 
   /** Keep an attempt until it is due (retries, redeliveries); also called by the RunExecutor Worker. */
   async schedule(p: PendingRun): Promise<void> {
-    await this.ctx.storage.put(PENDING_PREFIX + p.msg.runId, p)
-    await this.rearm()
+    await this.ctx.storage.transaction(async (txn) => {
+      const key = PENDING_PREFIX + p.msg.runId
+      const current = await txn.get<PendingRun>(key)
+      // Outbox replay and infrastructure redelivery may arrive out of order.
+      // Keep the legacy key, but only advance (attempt, deliveries); equal
+      // deliveries are idempotent and preserve their original deadline.
+      if (!current || p.msg.attempt > current.msg.attempt ||
+          (p.msg.attempt === current.msg.attempt && p.deliveries > current.deliveries)) {
+        await txn.put(key, p)
+      }
+      await this.rearm(txn)
+    })
   }
 
   async scheduleAction(id: string, dueAt: number): Promise<void> {
@@ -165,25 +181,25 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     await this.ctx.storage.deleteAll()
   }
 
-  private async setNext(next: number | null): Promise<void> {
-    if (next === null) await this.ctx.storage.delete(K_NEXT)
-    else await this.ctx.storage.put(K_NEXT, next)
+  private async setNext(next: number | null, storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<void> {
+    if (next === null) await storage.delete(K_NEXT)
+    else await storage.put(K_NEXT, next)
   }
 
   /** Point the alarm at the earliest of the next fire and any pending attempt. */
-  private async rearm(): Promise<void> {
-    const [next, pending, actions] = await Promise.all([this.ctx.storage.get<number>(K_NEXT), this.pendingRuns(), this.pendingActions()])
+  private async rearm(storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<void> {
+    const [next, pending, actions] = await Promise.all([storage.get<number>(K_NEXT), this.pendingRuns(storage), this.pendingActions(storage)])
     const at = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt))
-    if (Number.isFinite(at)) await this.ctx.storage.setAlarm(at)
-    else await this.ctx.storage.deleteAlarm()
+    if (Number.isFinite(at)) await storage.setAlarm(at)
+    else await storage.deleteAlarm()
   }
 
-  private async pendingRuns(): Promise<PendingRun[]> {
-    return [...(await this.ctx.storage.list<PendingRun>({ prefix: PENDING_PREFIX })).values()]
+  private async pendingRuns(storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<PendingRun[]> {
+    return [...(await storage.list<PendingRun>({ prefix: PENDING_PREFIX })).values()]
   }
 
-  private async pendingActions(): Promise<PendingAction[]> {
-    return [...(await this.ctx.storage.list<PendingAction>({ prefix: ACTION_PREFIX })).values()]
+  private async pendingActions(storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<PendingAction[]> {
+    return [...(await storage.list<PendingAction>({ prefix: ACTION_PREFIX })).values()]
   }
 
   /** Never throws (see alarm()). */

@@ -20,6 +20,7 @@ import { processRun } from '../src/executor/consumer'
 import { runMaintenance } from '../src/maintenance/maintenance'
 import type { StatsOverview, TaskStats } from '../src/shared/types'
 import { createTaskRow, setRuntimeSettings } from './helpers'
+import { formatInZone } from '../src/lib/time'
 
 function agg(patch: Partial<Agg> & { at?: Record<number, number> } = {}): Agg {
   const { at, ...rest } = patch
@@ -102,6 +103,44 @@ describe('statsWindow', () => {
     const w = statsWindow('90d', Date.UTC(2026, 10, 20, 12), 'America/New_York')
     const lengths = new Set(w.buckets.slice(1).map((b, i) => (b - w.buckets[i]) / HOUR_MS))
     expect(lengths).toEqual(new Set([24, 25])) // 2026-11-01 falls back
+  })
+
+  it.each(['30d', '90d'] as const)('%s starts Santiago days at their first valid instant across the midnight gap', (range) => {
+    const w = statsWindow(range, Date.parse('2026-09-20T12:00:00Z'), 'America/Santiago')
+    const day = w.buckets.indexOf(Date.parse('2026-09-06T04:00:00Z'))
+    expect(day).toBeGreaterThan(0)
+    expect(formatInZone(w.buckets[day], 'America/Santiago')).toBe('2026-09-06 01:00:00')
+    expect(w.buckets[day] - w.buckets[day - 1]).toBe(24 * HOUR_MS)
+    expect(w.buckets[day + 1] - w.buckets[day]).toBe(23 * HOUR_MS)
+    const out = bucketize(w, ['2026-09-06T02:30:00Z', '2026-09-06T03:30:00Z', '2026-09-06T04:30:00Z']
+      .map((iso) => ({ start: Date.parse(iso), agg: agg({ success: 1 }) })))
+    expect(out[day - 1].success).toBe(2)
+    expect(out[day].success).toBe(1)
+  })
+
+  it('excludes the previous local date when a midnight gap is the first day of the range', () => {
+    const w = statsWindow('30d', Date.parse('2026-10-05T12:00:00Z'), 'America/Santiago')
+    expect(w.from).toBe(Date.parse('2026-09-06T04:00:00Z'))
+    const out = bucketize(w, [
+      { start: Date.parse('2026-09-06T03:59:59Z'), agg: agg({ failed: 7 }) },
+      { start: Date.parse('2026-09-06T04:00:00Z'), agg: agg({ success: 2 }) },
+    ])
+    expect(summarize(out[0])).toMatchObject({ success: 2, failed: 0 })
+  })
+
+  it.each([
+    ['America/Havana', '2026-11-01T12:00:00Z', '2026-11-01T04:00:00Z', '2026-11-01 00:00:00'],
+    ['America/Sao_Paulo', '2018-11-04T12:00:00Z', '2018-11-04T03:00:00Z', '2018-11-04 01:00:00'],
+    ['Australia/Lord_Howe', '2026-10-04T12:00:00Z', '2026-10-03T13:30:00Z', '2026-10-04 00:00:00'],
+    ['Pacific/Chatham', '2026-10-16T09:00:00Z', '2026-10-15T10:15:00Z', '2026-10-16 00:00:00'],
+    ['Pacific/Kiritimati', '2026-10-16T09:00:00Z', '2026-10-15T10:00:00Z', '2026-10-16 00:00:00'],
+    ['+05:17', '2026-10-16T12:00:00Z', '2026-10-15T18:43:00Z', '2026-10-16 00:00:00'],
+    ['-03:30', '2026-10-16T12:00:00Z', '2026-10-16T03:30:00Z', '2026-10-16 00:00:00'],
+  ])('keeps day boundaries exact in %s', (tz, now, expected, label) => {
+    const w = statsWindow('30d', Date.parse(now), tz)
+    expect(w.buckets[29]).toBe(Date.parse(expected))
+    expect(formatInZone(w.buckets[29], tz)).toBe(label)
+    expect(w.buckets.every((start, i) => i === 0 || start > w.buckets[i - 1])).toBe(true)
   })
 })
 
@@ -349,6 +388,25 @@ describe('stats API', () => {
     const body = (await (await get('/stats/overview?range=90d&tz=UTC')).json()) as StatsOverview
     expect(body.granularity).toBe('day')
     expect(body.series).toHaveLength(90)
+  })
+
+  it('keeps a midnight-gap range exact after the individual run logs expire', async () => {
+    const now = Date.parse('2026-10-05T12:00:00Z')
+    vi.spyOn(Date, 'now').mockReturnValue(now)
+    const task = await createTaskRow()
+    for (const iso of ['2026-09-06T03:30:00Z', '2026-09-06T04:00:00Z', '2026-09-07T02:59:00Z', '2026-09-07T03:00:00Z']) {
+      const at = Date.parse(iso)
+      await insertSkippedRun(env.DB, { taskId: task.id, scheduledAt: at, reason: 'fixture' }, at)
+    }
+    await env.DB.prepare('DELETE FROM runs').run()
+    for (const path of ['/stats/overview', `/tasks/${task.id}/stats`]) {
+      const response = await get(`${path}?range=30d&tz=America%2FSantiago`)
+      expect(response.status).toBe(200)
+      const body = await response.json() as TaskStats
+      expect(body.summary.skipped).toBe(3)
+      expect(body.series[0]).toMatchObject({ t: Date.parse('2026-09-06T04:00:00Z'), skipped: 2 })
+      expect(body.series[1]).toMatchObject({ t: Date.parse('2026-09-07T03:00:00Z'), skipped: 1 })
+    }
   })
 
   it.each(['30d', '90d'] as const)('%s keeps fractional-timezone boundaries exact after run logs expire', async (range) => {

@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { renderTemplate } from '../lib/template'
+import { redact, renderTemplate } from '../lib/template'
 import type { ExecutionResult, Executor } from './types'
 import { evaluateSuccessCondition, successConditionSchema } from './success-condition'
 
@@ -51,11 +51,12 @@ async function readLimited(res: Response, limit: number): Promise<{ text: string
   return { text: new TextDecoder().decode(buf), bytes: buf.length }
 }
 
-export function truncate(text: string, limit = RESPONSE_BODY_LIMIT): string {
+export function truncate(text: string, limit = RESPONSE_BODY_LIMIT, secrets: string[] = [], sourceTruncated = false): string {
   const bytes = new TextEncoder().encode(text)
-  if (bytes.length <= limit) return text
+  if (bytes.length <= limit && !sourceTruncated) return redact(text, secrets)
   // Drop a possibly split trailing multi-byte character.
-  return new TextDecoder().decode(bytes.subarray(0, limit)).replace(/�$/, '') + '…[truncated]'
+  const prefix = new TextDecoder().decode(bytes.subarray(0, limit)).replace(/�$/, '')
+  return redact(prefix, secrets, true) + '…[truncated]'
 }
 
 export const httpExecutor: Executor<HttpConfig> = {
@@ -93,6 +94,7 @@ export const httpExecutor: Executor<HttpConfig> = {
 
     let text: string
     let bodyTooLarge = false
+    let logTruncated = false
     try {
       // One extra byte distinguishes an exact 4 KB response from a truncated one.
       const inspectBody = config.successCondition?.rules.some((rule) => rule.type !== 'status')
@@ -100,6 +102,9 @@ export const httpExecutor: Executor<HttpConfig> = {
       const response = await readLimited(res, limit)
       text = response.text
       bodyTooLarge = response.bytes > KEYWORD_SCAN_LIMIT
+      // Decoding can discard a BOM; retain the original byte boundary so a
+      // partial variable still gets masked even when decoded text is shorter.
+      logTruncated = response.bytes > RESPONSE_BODY_LIMIT
     } catch (err) {
       return {
         ok: false,
@@ -119,7 +124,7 @@ export const httpExecutor: Executor<HttpConfig> = {
     return {
       ok: error === null,
       httpStatus: res.status,
-      responseBody: truncate(text),
+      responseBody: truncate(text, RESPONSE_BODY_LIMIT, Object.values(variables), logTruncated),
       error,
       durationMs: Date.now() - started,
     }

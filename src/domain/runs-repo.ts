@@ -69,14 +69,15 @@ export async function insertSkippedRun(
   run: { taskId: string; scheduledAt: number; reason: string },
   now: number,
 ): Promise<void> {
+  const runId = crypto.randomUUID()
   await db.batch([
     db
       .prepare(
         `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, finished_at, error, created_at, updated_at)
          SELECT ?, ?, 'schedule', 'skipped', 0, ?, ?, ?, ?, ? ${TASK_EXISTS}`,
       )
-      .bind(crypto.randomUUID(), run.taskId, run.scheduledAt, now, run.reason, now, now, run.taskId),
-    skippedStatement(db, run.taskId, run.scheduledAt),
+      .bind(runId, run.taskId, run.scheduledAt, now, run.reason, now, now, run.taskId),
+    skippedStatement(db, runId),
   ])
 }
 

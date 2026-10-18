@@ -15,6 +15,12 @@ export class ValidationError extends Error {
   }
 }
 
+export class ConflictError extends Error {
+  constructor(message = '配置已被其他操作更新，请重新加载后再保存。') {
+    super(message)
+  }
+}
+
 export function zodIssues(error: z.ZodError): Issue[] {
   return error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }))
 }
@@ -78,9 +84,10 @@ export async function createTask(env: CloudflareBindings, raw: unknown): Promise
   return task
 }
 
-export async function updateTask(env: CloudflareBindings, id: string, raw: unknown): Promise<Task | null> {
+export async function updateTask(env: CloudflareBindings, id: string, raw: unknown, expectedVersion?: number): Promise<Task | null> {
   const now = Date.now()
-  const task = await repo.updateTask(env.DB, id, await parseTaskInput(raw, now, env), now)
+  const task = await repo.updateTask(env.DB, id, await parseTaskInput(raw, now, env), now, expectedVersion)
+  if (!task && expectedVersion !== undefined && await repo.getTask(env.DB, id)) throw new ConflictError()
   if (task) await syncScheduler(env, task)
   return task
 }

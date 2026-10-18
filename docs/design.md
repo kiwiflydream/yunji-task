@@ -81,7 +81,7 @@
 - `run_actions`（`WITHOUT ROWID`）：动作 ID、run / task ID、JSON 负载、到期时间、尝试次数、租约、失败原因和终止时间；按到期时间的部分索引恢复未完成动作，按 run ID 查找和级联删除。
 - `run_stats`：主键 `(task_id, bucket)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
-- `settings`：`key` → JSON（`alert` 为全局告警，`runtime` 为运行设置；内部 `maintenance:scheduler-reconcile` 的更新时间用于控制每小时全量对账）。
+- `settings`：`key` → JSON，`version` 是每条配置的递增版本（`alert` 为全局告警，`runtime` 为运行设置；内部 `maintenance:scheduler-reconcile` 的更新时间用于控制每小时全量对账）。运行和告警设置的条件保存原子校验版本，未保存的配置版本为 0；后台绑定表单初始版本，冲突返回 409，不覆盖新配置。任务更新同样支持按 `tasks.version` 条件保存。
 
 下次触发时间不落库，列表页按 cron 现算，避免秒级任务每秒写 D1。
 

@@ -25,7 +25,7 @@ async function mockApi(page) {
     const req = route.request()
     const url = new URL(req.url())
     const path = url.pathname.slice('/admin/api'.length)
-    if (path === '/me') return route.fulfill({ json: { user: 'admin', authMode: 'basic', executionMode: 'worker', retentionDays: 30, statsRetentionDays: 90, queueAvailable: true, senderAvailable: false } })
+    if (path === '/me') return route.fulfill({ json: { user: 'admin', authMode: 'basic', executionMode: 'worker', retentionDays: 30, statsRetentionDays: 90, runtimeSettingsVersion: 1, queueAvailable: true, senderAvailable: false } })
     if (path === '/tasks') return route.fulfill({ json: { tasks: state.deleted ? [] : [task] } })
     if (path === '/variables') return route.fulfill({ json: { variables: [] } })
     if (path === `/tasks/${task.id}`) {

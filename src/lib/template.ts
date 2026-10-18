@@ -45,12 +45,32 @@ export function jsonStringEscape(value: string): string {
   return JSON.stringify(value).slice(1, -1)
 }
 
-/** Redact plain and JSON-escaped values, longest first so prefixes cannot leave secret suffixes. */
-export function redact(text: string, secrets: string[]): string {
+/** Length of the longest pattern prefix at the end of text, in linear time. */
+function trailingPrefix(text: string, pattern: string): number {
+  const failure = new Uint32Array(pattern.length)
+  for (let i = 1, matched = 0; i < pattern.length; i++) {
+    while (matched > 0 && pattern[i] !== pattern[matched]) matched = failure[matched - 1]
+    if (pattern[i] === pattern[matched]) matched++
+    failure[i] = matched
+  }
+  let matched = 0
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+    while (matched > 0 && (matched === pattern.length || char !== pattern[matched])) matched = failure[matched - 1]
+    if (char === pattern[matched]) matched++
+  }
+  return matched
+}
+
+/** Redact values and JSON escapes; a truncated log also hides partial values at its tail. */
+export function redact(text: string, secrets: string[], truncated = false): string {
   const patterns = [...new Set(secrets.filter((secret) => secret.length >= 4)
     .flatMap((secret) => [secret, jsonStringEscape(secret)]))]
     .sort((a, b) => b.length - a.length)
-  let out = text
+  // The response reader may already have cut the value off. Full-match replacement
+  // alone cannot protect that suffix, even if it runs before log truncation.
+  const tail = truncated ? patterns.reduce((longest, pattern) => Math.max(longest, trailingPrefix(text, pattern)), 0) : 0
+  let out = tail > 0 ? text.slice(0, -tail) + '***' : text
   for (const pattern of patterns) out = out.split(pattern).join('***')
   return out
 }

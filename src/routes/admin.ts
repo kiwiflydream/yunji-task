@@ -2,7 +2,7 @@ import { Hono } from 'hono'
 import { csrf } from 'hono/csrf'
 import { secureHeaders } from 'hono/secure-headers'
 import { requireAdmin, type AdminVariables } from '../auth/admin'
-import { getRuntimeSettings } from '../domain/settings'
+import { getRuntimeSettingsState } from '../domain/settings'
 import { hasRunQueue } from '../executor/mode'
 import { hasSender } from '../executor/sender'
 import type { AdminMe } from '../shared/types'
@@ -20,10 +20,11 @@ admin.use('*', requireAdmin)
 admin.use('*', csrf())
 
 admin.get('/api/me', async (c) => {
-  const settings = await getRuntimeSettings(c.env.DB)
+  const { settings, version } = await getRuntimeSettingsState(c.env.DB)
   c.header('cache-control', 'no-store')
   return c.json<AdminMe>({
     ...settings,
+    runtimeSettingsVersion: version,
     user: c.get('adminUser'),
     authMode: c.env.ADMIN_AUTH_MODE?.trim() === 'access' ? 'access' : 'basic',
     queueAvailable: hasRunQueue(c.env),

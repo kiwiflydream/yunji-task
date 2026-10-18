@@ -84,6 +84,7 @@ export const DEFAULT_RUNTIME_SETTINGS: RuntimeSettings = {
 
 /** GET /admin/api/me */
 export interface AdminMe extends RuntimeSettings {
+  runtimeSettingsVersion: number
   user: string
   authMode: AdminAuthMode
   /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
