@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
 import { api } from '../api'
-import { LanguageSwitcher } from './LanguageSwitcher'
 
 const NAV = [
   { href: '/', label: '任务', icon: ListChecksIcon, match: (p: string) => p === '/' || p.startsWith('/tasks') },
@@ -73,12 +72,9 @@ function ShellContent({ children }: { children: ReactNode }) {
         </Sidebar.Footer>
       </Sidebar>
       <main className="min-w-0 flex-1 overflow-y-auto bg-kumo-canvas">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-kumo-hairline bg-kumo-base px-4 py-2 md:justify-end">
-          <div className="flex items-center gap-2 md:hidden">
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-kumo-hairline bg-kumo-base px-4 py-2 md:hidden">
             <SidebarToggle />
             <Text bold>{tr("云吉 Task")}</Text>
-          </div>
-          <LanguageSwitcher />
         </div>
         <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-6">{children}</div>
       </main>

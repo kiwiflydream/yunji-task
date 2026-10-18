@@ -1,3 +1,4 @@
+import { AppearanceSettings } from '../components/AppearanceSettings'
 import { SafetySettingsForm } from '../components/SafetySettingsForm'
 import { localizeIssueMessage } from '../locale'
 import { tr, useLocale } from '../i18n'
@@ -9,6 +10,8 @@ import { api, ApiError, errorMessage, type VersionedAlertSettings } from '../api
 import { DescriptionList } from '../components/DescriptionList'
 import { AlertTemplateHelp } from '../components/AlertTemplateHelp'
 import { PageHeader } from '../components/PageHeader'
+import { LanguageSwitcher } from '../components/LanguageSwitcher'
+import { AboutSettings } from '../components/AboutSettings'
 import { ErrorBanner, PageLoader } from '../components/States'
 import { FORM_CONFLICT_MESSAGE, useVersionedForm } from '../lib/versioned-form'
 
@@ -22,6 +25,18 @@ export function SettingsPage() {
     <>
       <PageHeader title={tr("设置")} />
       <div className="flex flex-col gap-4">
+        <LayerCard>
+          <LayerCard.Primary>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-col gap-1">
+                <Text bold>{tr("语言")}</Text>
+                <Text size="xs" variant="secondary">{tr("界面语言仅保存在当前浏览器，不改变任务配置、时区或通知模板。")}</Text>
+              </div>
+              <LanguageSwitcher />
+            </div>
+          </LayerCard.Primary>
+        </LayerCard>
+        <AppearanceSettings />
         {me.isError && <ErrorBanner error={me.error} />}
         {!me.isFetchedAfterMount && !me.isError ? <PageLoader /> : me.data && (
           <RuntimeSettingsForm initial={me.data} />
@@ -55,6 +70,7 @@ export function SettingsPage() {
             )}
           </LayerCard.Primary>
         </LayerCard>
+        <AboutSettings />
       </div>
     </>
   )

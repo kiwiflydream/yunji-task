@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+export { useDarkMode } from './theme'
 
 // All pairs validated with the dataviz palette checker against the Kumo base
 // surface (light #ffffff, dark oklch(17% 0 0) ≈ #0f0f0f).
@@ -26,17 +26,3 @@ export const statusColors = (dark: boolean) => STATUS[mode(dark)]
 export const seriesColors = (dark: boolean) => SERIES[mode(dark)]
 /** Chart surface; used as the stroke that separates adjacent fills. */
 export const surfaceColor = (dark: boolean) => SURFACE[mode(dark)]
-
-const media = () => window.matchMedia('(prefers-color-scheme: dark)')
-
-/** Tracks the system color scheme, same source as the `data-mode` attribute. */
-export function useDarkMode(): boolean {
-  return useSyncExternalStore(
-    (onChange) => {
-      const m = media()
-      m.addEventListener('change', onChange)
-      return () => m.removeEventListener('change', onChange)
-    },
-    () => media().matches,
-  )
-}

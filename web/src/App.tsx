@@ -1,7 +1,8 @@
+import { useTheme } from './lib/theme'
 import { useLocale } from './i18n'
 import { LinkProvider, type LinkComponentProps, Toasty, TooltipProvider } from '@cloudflare/kumo'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { forwardRef, lazy, Suspense, useEffect } from 'react'
+import { forwardRef, lazy, Suspense } from 'react'
 import { Link as RouterLink, Route, Router, Switch as Routes } from 'wouter'
 import { AppShell } from './components/AppShell'
 import { NotFound, PageLoader } from './components/States'
@@ -26,20 +27,10 @@ const AppLink = forwardRef<HTMLAnchorElement, LinkComponentProps>(({ href, to, .
     : <a ref={ref} href={target} {...rest} />
 })
 
-function useSystemColorMode() {
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => (document.documentElement.dataset.mode = media.matches ? 'dark' : 'light')
-    apply()
-    media.addEventListener('change', apply)
-    return () => media.removeEventListener('change', apply)
-  }, [])
-}
-
 export function App() {
   useLocale()
 
-  useSystemColorMode()
+  useTheme()
   return (
     <QueryClientProvider client={queryClient}>
       <Router base="/admin">

@@ -2,6 +2,8 @@
 
 部署在 Cloudflare 上的轻量 HTTP 与 Worker RPC 定时任务管理工具。
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kiwiflydream/yunji-task)
+
 把接口心跳、数据同步、缓存刷新等定时请求放到一个后台管理，查看每次执行的结果、耗时和失败原因，并在最终失败时接收通知。无需维护常驻服务器。
 
 [快速部署](#快速部署) · [使用指南与 API](docs/usage.md) · [执行方式与费用](docs/execution.md) · [本地开发](docs/development.md)
@@ -19,6 +21,10 @@
 - **管理界面**：支持简体中文、English、深浅色主题和移动端，也可通过 REST API 管理任务。
 
 ## 快速部署
+
+点击上方 **Deploy to Cloudflare** 按钮进入部署向导，按提示连接 GitHub、选择 Cloudflare 账号并填写密钥。部署命令使用 `pnpm run deploy`，以完成构建、D1 数据库迁移和 Worker 发布。正式使用前，请按下方第 5 步配置 **Cloudflare Access** 后台登录。
+
+如果希望在本地通过命令行部署，按以下步骤操作。
 
 准备一个 Cloudflare 账号，以及 Node.js 22.x（22.12 及以上）或 24.x、pnpm 10。下载或克隆本项目后，在项目目录操作。
 
@@ -147,3 +153,7 @@ pnpm run deploy
 云吉 Task 支持 HTTP 请求与已绑定 Worker 的 RPC 方法调用，单次等待最长 300 秒。秒级 Cron 表示支持按秒配置计划，实际触发仍受平台调度和网络影响；错过的周期触发不会补跑。
 
 部署或运行时更新可能打断进行中的请求。接收任务请求的业务接口应处理自身的幂等与重复调用，执行记录和失败重试不能代替业务事务。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
