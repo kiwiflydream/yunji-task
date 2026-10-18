@@ -1,6 +1,6 @@
 import { DAY_MS, markLostRuns, PURGE_BATCH, purgeOldRuns } from '../domain/runs-repo'
 import { getRuntimeSettings } from '../domain/settings'
-import { dueActions } from '../domain/actions-repo'
+import { dueActions, expireActions } from '../domain/actions-repo'
 import { purgeOldStats } from '../domain/stats-repo'
 import { syncScheduler } from '../domain/task-service'
 import { listAllTasks, listTaskIds } from '../domain/tasks-repo'
@@ -47,6 +47,8 @@ export async function runMaintenance(env: CloudflareBindings, now = Date.now()):
     ).bind(RECONCILE_KEY, now).run()
   }
 
+  await expireActions(env.DB, now)
+  await env.DB.prepare('DELETE FROM execution_budget WHERE day < ?').bind(Math.floor(now / DAY_MS) - 2).run()
   const lostRuns = await markLostRuns(env.DB, now)
 
   for (const action of await dueActions(env.DB, now)) {

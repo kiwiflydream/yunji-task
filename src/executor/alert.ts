@@ -1,3 +1,4 @@
+import { withDeadline } from '../lib/deadline'
 import type { RunTrigger } from '../domain/runs-repo'
 import { getAlertSettings } from '../domain/settings'
 import { alertSchema, type Task } from '../domain/task'
@@ -27,7 +28,6 @@ export async function resolveAlertTarget(
   db: D1Database,
   task: AlertTask,
 ): Promise<AlertTarget | null> {
-  // Old queued alert actions may still contain the legacy topic field.
   const alert = alertSchema.parse(task.alert)
   if (alert.mode === 'off') return null
   if (alert.mode === 'custom') return { kind: 'webhook', url: alert.url, bodyTemplate: alert.bodyTemplate }
@@ -90,7 +90,7 @@ export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask,
     const sender = senderService(env)
     if (!sender) throw new Error('alert targets Yunji Sender but the SENDER service binding is not configured (see wrangler.jsonc "services")')
     // The key makes outbox retries safe: Yunji Sender returns the first message instead of sending again.
-    await sender.send({ channelGroup: target.channelGroup, ...senderAlertMessage(task, run) }, { idempotencyKey: `yunji-task:alert:${run.id}` })
+    await withDeadline(sender.send({ channelGroup: target.channelGroup, ...senderAlertMessage(task, run) }, { idempotencyKey: `yunji-task:alert:${run.id}` }), ALERT_TIMEOUT_MS)
     return
   }
   await sendWebhookAlert(env, target, task, run)

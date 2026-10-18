@@ -37,6 +37,8 @@ export interface RunningSlot {
 }
 
 export interface SchedulerStatus {
+  terminalPending: number
+  terminalExhausted: number
   version: number | null
   alarmAt: number | null
   running: RunningSlot | null
@@ -161,3 +163,6 @@ export interface StatsOverview extends StatsBase {
 export interface TaskStats extends StatsBase {
   histogram: DurationBucket[]
 }
+
+/** Marks task-originated HTTP requests so trigger endpoints can reject cycles. */
+export const RUN_HEADER = 'x-yunji-task-run'

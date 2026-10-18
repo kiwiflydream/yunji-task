@@ -6,8 +6,12 @@ import { insertSkippedRun } from '../src/domain/runs-repo'
 
 const AUTH = { authorization: `Bearer ${env.API_TOKEN}` }
 
-function call(path: string, init: RequestInit = {}, e: CloudflareBindings = env) {
+async function call(path: string, init: RequestInit = {}, e: CloudflareBindings = env) {
   const headers = { ...AUTH, 'content-type': 'application/json', ...(init.headers as Record<string, string>) }
+  if (init.method === 'PUT' && (path.startsWith('/tasks/') || path === '/settings/alert')) {
+    const current = await app.request(`http://yunji-task.test/api${path}`, { headers }, e)
+    Object.assign(headers, { 'if-match': current.headers.get('etag') ?? '"0"' })
+  }
   return app.request(`http://yunji-task.test/api${path}`, { ...init, headers }, e)
 }
 
@@ -144,6 +148,8 @@ describe('tasks API', () => {
       version: null,
       alarmAt: null,
       running: null,
+      terminalPending: 0,
+      terminalExhausted: 0,
     })
   })
 

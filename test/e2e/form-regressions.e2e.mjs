@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { test, expect } from '@playwright/test'
 
-// This fixture never contacts a Worker, D1, or a real account. The optional
-// If-Match behavior mirrors the API's backwards-compatible REST contract.
+// This fixture never contacts a Worker, D1, or a real account.
+// Updates require If-Match, matching the API contract.
 async function fixture(page, testInfo) {
   const zh = testInfo.project.name === 'mobile-zh'
   const text = zh ? {
@@ -47,7 +47,8 @@ async function fixture(page, testInfo) {
       const match = req.headers()['if-match']
       const body = req.postDataJSON()
       state.writes.push({ surface, match, body })
-      if (match !== undefined && match !== `"${version}"`) return route.fulfill({ status: 409, json: { error: 'conflict', message: '配置已被其他操作更新，请重新加载后再保存。' } })
+      if (match === undefined) return route.fulfill({ status: 428, json: { error: 'precondition_required' } })
+      if (match !== `"${version}"`) return route.fulfill({ status: 409, json: { error: 'conflict', message: '配置已被其他操作更新，请重新加载后再保存。' } })
       if (surface === 'task') {
         state.task = { ...state.task, ...body, version: version + 1 }
         return route.fulfill({ json: { task: state.task } })

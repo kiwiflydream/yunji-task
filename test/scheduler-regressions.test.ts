@@ -30,7 +30,7 @@ for (const deliveries of [0, 2]) {
   })
 }
 
-it.each(['direct', 'worker', 'queue'] as const)('%s pending attempts and deliveries never regress, including legacy keys', async (mode) => {
+it.each(['direct', 'worker', 'queue'] as const)('%s pending attempts and deliveries never regress, including persisted records', async (mode) => {
   const stub = env.TASK_SCHEDULER.getByName(crypto.randomUUID())
   const dueAt = Date.now() + 86_400_000
   const msg: RunMessage = { taskId: crypto.randomUUID(), runId: crypto.randomUUID(), scheduledAt: dueAt, trigger: 'manual', attempt: 3 }
@@ -117,7 +117,7 @@ it('a once-sync suspended in D1 cannot overwrite a newer independent sync RPC or
     await state.storage.deleteAlarm()
     const real = (instance as unknown as { env: CloudflareBindings }).env
     const DB = {
-      prepare: (query: string) => ({ bind: (...args: unknown[]) => ({ run: async () => {
+      prepare: (query: string) => !query.includes('SET enabled = 0') ? real.DB.prepare(query) : ({ bind: (...args: unknown[]) => ({ run: async () => {
         entered = true
         await gate
         return real.DB.prepare(query).bind(...args).run()
@@ -130,7 +130,7 @@ it('a once-sync suspended in D1 cannot overwrite a newer independent sync RPC or
   const old = Promise.resolve(stub.sync(toSnapshot(task)))
   try {
     await vi.waitFor(() => expect(entered).toBe(true))
-    const updated = await updateTask(env.DB, task.id, taskInputSchema.parse({ ...task, schedule: { type: 'cron', cron: '*/10 * * * * *' } }), start)
+    const updated = await updateTask(env.DB, task.id, taskInputSchema.parse({ ...task, schedule: { type: 'cron', cron: '*/10 * * * * *' } }), start, task.version)
     await stub.sync(toSnapshot(updated!))
     expect(await stub.status()).toMatchObject({ version: 2, alarmAt: expect.any(Number) })
     // The old D1 call is still pending: newer RPCs and the normal alarm must work.

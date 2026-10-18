@@ -1,3 +1,4 @@
+import { RUN_HEADER } from '../shared/types'
 import { z } from 'zod'
 import { redact, renderTemplate } from '../lib/template'
 import type { ExecutionResult, Executor } from './types'
@@ -67,13 +68,14 @@ export const httpExecutor: Executor<HttpConfig> = {
     return [config.url, config.body, ...Object.values(config.headers)]
   },
 
-  async execute(config, variables): Promise<ExecutionResult> {
+  async execute(config, variables, context): Promise<ExecutionResult> {
     const started = Date.now()
     let res: Response
     try {
       const url = renderTemplate(config.url, variables)
       const headers = new Headers()
       for (const [k, v] of Object.entries(config.headers)) headers.set(k, renderTemplate(v, variables))
+      if (context) headers.set(RUN_HEADER, context.run.runId)
       const hasBody = config.method !== 'GET' && config.method !== 'HEAD' && config.body !== ''
       res = await fetch(url, {
         method: config.method,

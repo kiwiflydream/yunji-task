@@ -1,3 +1,4 @@
+import { admit, SafetyError, RECOVERY_MAX_AGE_MS } from '../domain/safety'
 import { claimRun, recordAttempt, type RunMessage } from '../domain/runs-repo'
 import { getTask } from '../domain/tasks-repo'
 import { resolveVariables } from '../domain/variables'
@@ -70,6 +71,15 @@ export async function processRun(
     return
   }
 
+  try {
+    if (Date.now() - msg.scheduledAt >= RECOVERY_MAX_AGE_MS) throw new SafetyError('run expired before execution')
+    await admit(env.DB, task.id, 'attempt')
+  } catch (err) {
+    if (!(err instanceof SafetyError)) throw err
+    await recordAttempt(env.DB, msg.runId, 'failed', { httpStatus: null, responseBody: null, error: err.message, durationMs: 0 }, Date.now())
+    await transport.finished(msg)
+    return
+  }
   const executor = getExecutor(task.executor.type)
   let variables: Record<string, string> = {}
   let result: ExecutionResult

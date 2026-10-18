@@ -11,12 +11,17 @@ import { captureQueue, createTaskRow, toSnapshot } from './helpers'
 afterEach(() => vi.restoreAllMocks())
 
 const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
-const call = (method: string, body?: unknown, e: CloudflareBindings = env) =>
-  app.request('https://yunji-task.test/api/settings/runtime', {
-    method,
-    headers: AUTH,
-    body: body === undefined ? undefined : JSON.stringify(body),
+const call = async (method: string, body?: unknown, e: CloudflareBindings = env) => {
+  const headers = { ...AUTH }
+  if (method === 'PUT') {
+    const current = await app.request('https://yunji-task.test/api/settings/runtime', { headers }, e)
+    Object.assign(headers, { 'if-match': current.headers.get('etag') })
+  }
+  return app.request('https://yunji-task.test/api/settings/runtime', {
+    method, headers, body: body === undefined ? undefined : JSON.stringify(body),
   }, e)
+}
+
 const saved = { executionMode: 'direct', retentionDays: 7, statsRetentionDays: 365 } as const
 
 describe('runtime settings', () => {
@@ -94,7 +99,7 @@ describe('runtime settings', () => {
     const authorization = `Basic ${btoa(`admin:${env.ADMIN_PASSWORD}`)}`
     const res = await app.request('https://yunji-task.test/admin/api/settings/runtime', {
       method: 'PUT',
-      headers: { authorization, 'content-type': 'application/json' },
+      headers: { authorization, 'content-type': 'application/json', 'if-match': (await call('GET')).headers.get('etag')! },
       body: JSON.stringify(saved),
     }, env)
     expect(res.status).toBe(200)

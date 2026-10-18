@@ -83,7 +83,7 @@ Webhook 默认提供 Bark JSON 模板，可直接填写自己的 Bark 推送地�
 
 将 `services` 合并到现有配置中，然后执行 `pnpm cf-typegen` 并重新部署。在后台选择「云吉 Sender」并填写渠道组标识，任务告警会通过 `channelGroup` 发往该组绑定的渠道，无需另配 Sender API Key。
 
-任务告警配置为 `{ "mode": "sender", "channelGroup": "ops-alert" }`，全局设置对应字段为 `senderChannelGroup`。旧任务、全局配置和待发送告警中的 `topic`、`senderTopic` 在读取时兼容转换；新旧字段同时提供时，以新字段为准。
+任务告警配置为 `{ "mode": "sender", "channelGroup": "ops-alert" }`，全局设置对应字段为 `senderChannelGroup`。仅接受上述字段名；未知字段会返回校验错误。
 
 告警先保存再投递，发送失败后间隔 30 秒、60 秒重试，最多发送 3 次。Webhook 采用至少一次投递语义，接收端可按 `run.id` 去重；Sender 调用使用 `yunji-task:alert:<run.id>` 幂等键。
 
@@ -158,4 +158,4 @@ curl "$TASK_BASE_URL/api/tasks" \
 
 统计接口支持 `range=24h|7d|30d|90d` 和 `tz=Asia/Shanghai`，默认范围为 24 小时，默认时区为 UTC。
 
-任务详情及全局运行、告警设置的 GET、PUT 响应包含 `ETag`。更新时在 `If-Match` 中原样传回，例如 `If-Match: "2"`，版本不一致返回 409。未传此请求头时按全量覆盖处理。变量 POST 遇到同名返回 409，PUT 保留创建或更新语义。
+任务详情及全局运行、告警设置的 GET、PUT 响应包含 `ETag`。更新时在 `If-Match` 中原样传回，例如 `If-Match: "2"`，版本不一致返回 409。未传此请求头返回 428，不会保存；首次保存尚不存在的全局设置时使用 GET 返回的 `ETag: "0"`。变量 POST 遇到同名返回 409，PUT 保留创建或更新语义。

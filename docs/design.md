@@ -45,7 +45,7 @@
 ## 投递语义与幂等
 
 - Queue 至少投递一次。每次执行有 `runId`：首次 `INSERT ... ON CONFLICT DO NOTHING` 抢占，重试用 `UPDATE ... WHERE status='retrying' AND attempt=n-1` 抢占。重复消息不调用任务接口，但会恢复该 run 尚未完成的投递动作。
-- `run_actions` 与执行结果在同一个 D1 batch 中写入，保存重试的原方式、消息及到期时间，或失败告警的配置快照。动作以 45 秒租约抢占，成功后删除；重试投递失败继续保留，告警耗尽后保留失败原因。DO 用 `action:<id>` 共用 alarm，再交给独立 `ActionExecutor`；维护任务每 5 分钟恢复待投递及过期租约。发送成功但确认前中断可能重复投递；任务接口有 attempt 抢占，告警接收方应按 `run.id` 去重。
+- `run_actions` 与执行结果在同一个 D1 batch 中写入，保存重试的原方式、消息及到期时间，或失败告警的配置快照。动作以 45 秒租约抢占，成功后删除；重试投递与槽位释放最多领取 10 次，告警最多领取 3 次；领取后中断也计数，所有动作创建后最多保留 24 小时。达到次数或期限后置为失败并保留原因。DO 用 `action:<id>` 共用 alarm，再交给独立 `ActionExecutor`；维护任务每 5 分钟恢复待投递及过期租约。发送成功但确认前中断可能重复投递；任务接口有 attempt 抢占，告警接收方应按 `run.id` 去重。
 - 消费者抢占后崩溃会留下 `running` / `retrying` 状态的 run，对账任务会把超时（running 15 分钟、retrying 75 分钟）且没有待投递动作的 run 标记为 `failed`（lost）。宁可丢一次执行，也不重复调用下游。待投递动作存在时不做 lost 或日志到期清理；删除 run 时级联删除动作。
 - DO alarm 处理函数不抛异常（避免 alarm 自动重试导致重复投递）。一次性触发的待投递记录与 `onceFiredVersion` 在同一 DO 存储事务中保存；读取全局方式失败后按 30 秒间隔恢复，使用同一执行 ID，确定方式后固定该方式。周期任务仍不补跑错过的触发。
 - 抢占是幂等的，所以 Queue 重投一个已经抢占过的 run 不会再执行一次。Queue 的自动重投只在抢占之前出错（例如 D1 暂时不可用）时有用；direct 模式用 30 秒后重新投递来模拟（最多 3 次）。
@@ -79,7 +79,7 @@
 
 - `tasks`：配置（扁平列 + `executor_config` / `alert_config` JSON）、`version`、`scheduler_synced_version`。同步成功仅确认对应版本，失败保持未同步；增量维护走未同步任务的部分索引。
 - `runs`（`WITHOUT ROWID`）：`id(runId)`、`task_id`、`trigger(schedule|manual)`、`status(running|retrying|success|failed|skipped)`、`attempt`、`execution_mode`、`effective_timeout_ms`、时间、`http_status`、`response_body(≤4KB)`、`error`。跳过的触发没有实际方式和超时。
-- `run_actions`（`WITHOUT ROWID`）：动作 ID、run / task ID、JSON 负载、到期时间、尝试次数、租约、失败原因和终止时间；按到期时间的部分索引恢复未完成动作，按 run ID 查找和级联删除。
+- `run_actions`（`WITHOUT ROWID`）：动作 ID、run / task ID、JSON 负载、到期时间、尝试次数、不可续期的 expires_at、租约、失败原因和终止时间；按到期时间的部分索引恢复未完成动作，按 run ID 查找和级联删除。
 - `run_stats`：主键 `(task_id, bucket)`，见下文「统计」。
 - `variables`：`name`、`value_encrypted`、`description`。
 - `settings`：`key` → JSON，`version` 是每条配置的递增版本（`alert` 为全局告警，`runtime` 为运行设置；内部 `maintenance:scheduler-reconcile` 的更新时间用于控制每小时全量对账）。运行和告警设置的条件保存原子校验版本，未保存的配置版本为 0；后台绑定表单初始版本，冲突返回 409，不覆盖新配置。任务更新同样支持按 `tasks.version` 条件保存。
@@ -146,3 +146,8 @@ D1 按写入行数计费，写操作碰到的每个索引都算额外一行。�
 ## RPC 执行器
 
 RPC 仅访问 `RPC_BINDINGS` 显式开放的 Service Binding，禁止内部基础设施绑定和保留方法。参数按字符串值展开变量，内置 `task.id`、`run.id`、`run.attempt`；执行 ID 在重试间稳定，可供目标业务幂等。返回值限于 JSON 或 void，正常返回默认成功，可追加 JSON 条件。调用会话在完成或本地超时后释放，超时不代表目标业务已取消。
+
+
+## 执行安全边界
+
+`settings.safety` 保存独立的全局暂停和日额度；`execution_budget` 按 UTC 日、dispatch/attempt 和任务累计。准入用单条条件 UPSERT 同时约束任务与全局数量，三种执行模式及重试共用实际执行额度。暂停或超限失败不再派生业务重试/告警。DO 交接计数在网络调用前持久化；D1 action 在领取时检查上限和期限，维护清理不能重新激活终态。HTTP 任务请求标记用于拒绝递归触发，不能依赖该标记识别丢弃头部的外部系统，日额度仍为最后一道限制。详细配置和语义见 [执行安全保护](execution.md#调用保护与紧急暂停)。

@@ -79,7 +79,7 @@ it.each([true, false])('rejects an out-of-range once timestamp, enabled=%s', asy
   expect(await res.json()).toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ path: 'schedule.runAt' })]) })
 })
 
-it('keeps legacy invalid dates from crashing the list formatter or editor', async () => {
+it('keeps invalid dates from crashing the list formatter or editor', async () => {
   expect(fmtTime(Date.now(), 'UTC')).not.toBe('—')
   const task = await createTaskRow({ schedule: { type: 'once', runAt: Date.now() + 60_000 } })
   if (task.schedule.type !== 'once') throw new Error('expected a once task')
@@ -153,7 +153,7 @@ it('an interrupted once acknowledgement cannot retake a slot after the run finis
   await runInDurableObject(stub, async (_, state) => {
     await state.storage.delete('nextRunAt')
     await state.storage.put('onceFiredVersion', task.version)
-    await state.storage.put(`once:${runId}`, { snapshot, runId, scheduledAt: now, dueAt: now, mode: 'queue' })
+    await state.storage.put(`once:${runId}`, { snapshot, runId, scheduledAt: now, dueAt: now, deliveries: 0, mode: 'queue' })
     await state.storage.setAlarm(now)
   })
   await runDurableObjectAlarm(stub)

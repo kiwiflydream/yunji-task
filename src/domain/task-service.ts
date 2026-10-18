@@ -1,3 +1,5 @@
+import { admit } from './safety'
+import { withDeadline } from '../lib/deadline'
 import { z } from 'zod'
 import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
@@ -88,10 +90,10 @@ export async function createTask(env: CloudflareBindings, raw: unknown): Promise
   return task
 }
 
-export async function updateTask(env: CloudflareBindings, id: string, raw: unknown, expectedVersion?: number): Promise<Task | null> {
+export async function updateTask(env: CloudflareBindings, id: string, raw: unknown, expectedVersion: number): Promise<Task | null> {
   const now = Date.now()
   const task = await repo.updateTask(env.DB, id, await parseTaskInput(raw, now, env), now, expectedVersion)
-  if (!task && expectedVersion !== undefined && await repo.getTask(env.DB, id)) throw new ConflictError()
+  if (!task && await repo.getTask(env.DB, id)) throw new ConflictError()
   if (task) await syncScheduler(env, task)
   return task
 }
@@ -125,7 +127,8 @@ export async function triggerTask(env: CloudflareBindings, id: string): Promise<
   const now = Date.now()
   const msg: RunMessage = { runId: crypto.randomUUID(), taskId: id, trigger: 'manual', scheduledAt: now, attempt: 1 }
   const mode = await effectiveMode(env, { executionMode: task.executionMode, timeoutMs: task.executor.config.timeoutMs })
-  if (mode === 'queue') await runQueue(env).send(msg)
-  else await env.TASK_SCHEDULER.getByName(id).execute(msg, mode)
+  await admit(env.DB, id, 'dispatch')
+  if (mode === 'queue') await withDeadline(runQueue(env).send(msg))
+  else await withDeadline(env.TASK_SCHEDULER.getByName(id).execute(msg, mode))
   return msg.runId
 }

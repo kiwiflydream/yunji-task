@@ -36,22 +36,16 @@ export const scheduleSchema = z
 export const SENDER_CHANNEL_GROUP_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const senderChannelGroupSchema = z.string().trim().regex(SENDER_CHANNEL_GROUP_RE, '渠道组标识只能包含小写字母、数字、点、下划线和连字符')
 
-export const alertSchema = z.preprocess((value) => {
-  // Read existing task configs, API clients and persisted outbox snapshots.
-  if (value && typeof value === 'object' && 'topic' in value && !('channelGroup' in value)) {
-    return { ...value, channelGroup: value.topic }
-  }
-  return value
-}, z.discriminatedUnion('mode', [
-  z.object({ mode: z.literal('inherit') }),
-  z.object({ mode: z.literal('off') }),
-  z.object({
+export const alertSchema = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('inherit') }),
+  z.strictObject({ mode: z.literal('off') }),
+  z.strictObject({
     mode: z.literal('custom'),
     url: z.string().trim().min(1).max(2048),
     bodyTemplate: z.string().max(8000).default(''),
   }),
-  z.object({ mode: z.literal('sender'), channelGroup: senderChannelGroupSchema }),
-]))
+  z.strictObject({ mode: z.literal('sender'), channelGroup: senderChannelGroupSchema }),
+])
 
 export const taskInputSchema = z.object({
   name: z.string().trim().min(1).max(100),

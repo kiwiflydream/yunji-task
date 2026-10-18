@@ -16,7 +16,7 @@ afterEach(() => vi.restoreAllMocks())
 
 const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
 const call = (path: string, init: RequestInit = {}, e: CloudflareBindings = env) =>
-  app.request(`http://yunji-task.test/api${path}`, { ...init, headers: AUTH }, e)
+  app.request(`http://yunji-task.test/api${path}`, { ...init, headers: { ...AUTH, ...init.headers } }, e)
 
 const YEARLY = { type: 'cron', cron: '0 0 0 1 1 *', timezone: 'UTC' } as const
 const SHORT_HTTP = (url = 'https://downstream.test/hook') => ({
@@ -186,7 +186,7 @@ describe('worker mode', () => {
     const created = await call('/tasks', { method: 'POST', body: body(25_000) })
     expect(created.status).toBe(201)
     const { task } = await created.json() as { task: { id: string } }
-    expect((await call(`/tasks/${task.id}`, { method: 'PUT', body: body(60_000) })).status).toBe(422)
+    expect((await call(`/tasks/${task.id}`, { method: 'PUT', headers: { 'if-match': '"1"' }, body: body(60_000) })).status).toBe(422)
     expect((await getTask(env.DB, task.id))?.executor.config.timeoutMs).toBe(25_000)
     for (const mode of ['direct', 'queue']) {
       expect((await call('/tasks', { method: 'POST', body: body(60_000, mode) })).status).toBe(201)

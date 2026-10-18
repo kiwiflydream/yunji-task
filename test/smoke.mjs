@@ -82,8 +82,14 @@ try {
     return fetch(`${base}/health`).then((r) => r.ok).catch(() => false)
   }, 'Worker startup')
   const api = async (path, method = 'GET', body) => {
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+    if (method === 'PUT' && (path.startsWith('/tasks/') || ['/settings/alert', '/settings/runtime'].includes(path))) {
+      const current = await fetch(`${base}/api${path}`, { headers })
+      assert.ok(current.ok)
+      headers['if-match'] = current.headers.get('etag')
+    }
     const res = await fetch(`${base}/api${path}`, {
-      method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      method, headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     })
     assert.ok(res.ok, `${method} ${path}: ${res.status} ${res.ok ? '' : await res.text()}`)

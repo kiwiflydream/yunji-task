@@ -56,6 +56,7 @@ CREATE TABLE run_actions (
   run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
   payload TEXT NOT NULL,
   due_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL DEFAULT 0,
   lease_until INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
@@ -75,7 +76,8 @@ CREATE TABLE variables (
 CREATE TABLE settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1
 );
 
 -- Minute pre-aggregated run statistics, one row per (task, UTC minute of scheduled_at).
@@ -110,3 +112,11 @@ CREATE TABLE run_stats (
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_run_stats_bucket ON run_stats (bucket);
+
+CREATE TABLE execution_budget (
+  day INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(day, kind, task_id)
+) WITHOUT ROWID;

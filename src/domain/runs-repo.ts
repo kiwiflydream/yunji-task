@@ -1,3 +1,4 @@
+import { RECOVERY_MAX_AGE_MS } from './safety'
 import type { ExecutionMode, Run, RunStatus, RunTrigger } from '../shared/types'
 import { finalOutcomeStatement, lostRunsStatement, skippedStatement } from './stats-repo'
 import { insertActionStatement, type RunAction } from './actions-repo'
@@ -192,12 +193,12 @@ export async function markLostRuns(db: D1Database, now: number): Promise<number>
     // Insert before closing, atomically with the lost result. Release actions
     // don't suppress LOST_WHERE; retry/alert actions still protect live work.
     db.prepare(
-      `INSERT INTO run_actions (id, task_id, run_id, payload, due_at)
+      `INSERT INTO run_actions (id, task_id, run_id, payload, due_at, expires_at)
        SELECT id || ':release', task_id, id,
-         json_object('kind', 'release', 'run', json_object('id', id, 'attempt', attempt)), ?
+         json_object('kind', 'release', 'run', json_object('id', id, 'attempt', attempt)), ?, ?
        FROM runs WHERE trigger = 'schedule' AND ${LOST_WHERE}
        ON CONFLICT (id) DO NOTHING`,
-    ).bind(now, ...params),
+    ).bind(now, now + RECOVERY_MAX_AGE_MS, ...params),
     db
       .prepare(
         `UPDATE runs SET status = 'failed', finished_at = ?, updated_at = ?,
@@ -219,4 +220,17 @@ export async function purgeOldRuns(db: D1Database, taskIds: string[], cutoff: nu
   const stmt = db.prepare(PURGE_RUNS_SQL)
   const results = await db.batch(taskIds.map((id) => stmt.bind(id, cutoff)))
   return results.map((r) => r.meta.changes)
+}
+
+/** Close a run without sending another alert/retry while a safety guard is active. */
+export async function failRun(db: D1Database, msg: RunMessage, reason: string, now = Date.now()): Promise<void> {
+  const where = "id = ? AND status IN ('running', 'retrying')"
+  await db.batch([
+    db.prepare(`INSERT INTO runs(id,task_id,trigger,status,attempt,scheduled_at,created_at,updated_at)
+      SELECT ?,?,?,'running',?,?,?,? ${TASK_EXISTS} ON CONFLICT(id) DO NOTHING`)
+      .bind(msg.runId, msg.taskId, msg.trigger, msg.attempt, msg.scheduledAt, now, now, msg.taskId),
+    lostRunsStatement(db, where, [msg.runId]),
+    db.prepare(`UPDATE runs SET status='failed',error=?,finished_at=?,updated_at=? WHERE ${where}`)
+      .bind(reason, now, now, msg.runId),
+  ])
 }

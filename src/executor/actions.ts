@@ -1,5 +1,7 @@
+import { withDeadline } from '../lib/deadline'
+import { getSafetySettings } from '../domain/safety'
 import { WorkerEntrypoint } from 'cloudflare:workers'
-import { actionsForRun, claimAction, completeAction, failAction } from '../domain/actions-repo'
+import { actionsForRun, cancelAction, claimAction, completeAction, failAction } from '../domain/actions-repo'
 import { sendFailureAlert } from './alert'
 import type { RunTransport } from './consumer'
 import { runQueue } from './mode'
@@ -12,22 +14,28 @@ export class ActionExecutor extends WorkerEntrypoint<CloudflareBindings> {
 }
 
 export async function deliverAction(id: string, env: CloudflareBindings, transport?: RunTransport): Promise<void> {
+  if ((await getSafetySettings(env.DB)).paused) {
+    await cancelAction(env.DB, id, Date.now(), 'execution paused by safety switch')
+    return
+  }
   const action = await claimAction(env.DB, id, Date.now())
   if (!action) return
   try {
-    const payload = action.payload
-    if (payload.kind === 'alert') {
-      await sendFailureAlert(env, payload.task, payload.run)
-    } else if (payload.kind === 'release') {
-      await env.TASK_SCHEDULER.getByName(action.taskId).complete(payload.run.id)
-    } else {
-      const delaySeconds = Math.max(0, Math.ceil((payload.runAt - Date.now()) / 1000))
-      if (transport?.mode === payload.mode) await transport.retry(payload.msg, delaySeconds)
-      else if (payload.mode === 'queue') await runQueue(env).send(payload.msg, { delaySeconds })
-      else await env.TASK_SCHEDULER.getByName(action.taskId).schedule({
-        msg: payload.msg, dueAt: Math.max(Date.now(), payload.runAt), deliveries: 0, mode: payload.mode,
-      })
-    }
+    await withDeadline((async () => {
+      const payload = action.payload
+      if (payload.kind === 'alert') {
+        await sendFailureAlert(env, payload.task, payload.run)
+      } else if (payload.kind === 'release') {
+        await env.TASK_SCHEDULER.getByName(action.taskId).complete(payload.run.id)
+      } else {
+        const delaySeconds = Math.max(0, Math.ceil((payload.runAt - Date.now()) / 1000))
+        if (transport?.mode === payload.mode) await transport.retry(payload.msg, delaySeconds)
+        else if (payload.mode === 'queue') await runQueue(env).send(payload.msg, { delaySeconds })
+        else await env.TASK_SCHEDULER.getByName(action.taskId).schedule({
+          msg: payload.msg, dueAt: Math.max(Date.now(), payload.runAt), deliveries: 0, mode: payload.mode,
+        })
+      }
+    })())
     await completeAction(env.DB, action, Date.now())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

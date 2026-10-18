@@ -152,7 +152,7 @@ test('reopening a completed row does not reuse its previously cached running sta
   await expect(dialog.getByText(text.success, { exact: true })).toBeVisible()
 })
 
-test('legacy invalid once dates keep the task list and editor usable', async ({ page }, testInfo) => {
+test('invalid once dates keep the task list and editor usable', async ({ page }, testInfo) => {
   const state = await mockApi(page)
   state.task.schedule = { type: 'once', runAt: 8640000000000001, timezone: 'UTC' }
   state.task.enabled = false
@@ -165,5 +165,5 @@ test('legacy invalid once dates keep the task list and editor usable', async ({ 
   await expect(date).toHaveValue('')
   await date.fill('2099-01-02T09:30')
   await expect(date).toHaveValue('2099-01-02T09:30')
-  await page.screenshot({ path: testInfo.outputPath('legacy-date-edit.png') })
+  await page.screenshot({ path: testInfo.outputPath('invalid-date-edit.png') })
 })

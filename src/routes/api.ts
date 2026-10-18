@@ -1,3 +1,4 @@
+import { getSafetySettings, putSafetySettings, safetySettingsSchema, SafetyError, RUN_HEADER } from '../domain/safety'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { requireApiToken } from '../auth/api-token'
@@ -65,9 +66,11 @@ async function jsonBody(req: Request): Promise<unknown> {
   }
 }
 
-function expectedVersion(request: Request): number | undefined {
+class PreconditionRequiredError extends Error {}
+
+function expectedVersion(request: Request): number {
   const header = request.headers.get('if-match')
-  if (header === null) return undefined
+  if (header === null) throw new PreconditionRequiredError('If-Match is required; read the current ETag before updating')
   const match = /^"(0|[1-9]\d*)"$/.exec(header)
   const version = match ? Number(match[1]) : NaN
   if (!Number.isSafeInteger(version)) throw new ValidationError([{ path: 'If-Match', message: 'If-Match 必须是双引号包围的整数版本号' }])
@@ -81,6 +84,8 @@ function expectedVersion(request: Request): number | undefined {
 export const apiRoutes = new Hono<{ Bindings: CloudflareBindings }>()
 
 apiRoutes.onError((err, c) => {
+  if (err instanceof PreconditionRequiredError) return c.json({ error: 'precondition_required', message: err.message }, 428)
+  if (err instanceof SafetyError) return c.json({ error: 'execution_blocked', message: err.message }, 429)
   if (err instanceof ValidationError) return c.json({ error: 'validation_failed', issues: err.issues }, 422)
   if (err instanceof ConflictError) return c.json({ error: 'conflict', message: err.message }, 409)
   console.error('api error', err)
@@ -108,7 +113,8 @@ apiRoutes.get('/tasks/:id', async (c) => {
 })
 
 apiRoutes.put('/tasks/:id', async (c) => {
-  const task = await service.updateTask(c.env, c.req.param('id'), await jsonBody(c.req.raw), expectedVersion(c.req.raw))
+  const expected = expectedVersion(c.req.raw)
+  const task = await service.updateTask(c.env, c.req.param('id'), await jsonBody(c.req.raw), expected)
   if (task) c.header('etag', `"${task.version}"`)
   return task ? c.json({ task: present(task) }) : c.json({ error: 'not_found' }, 404)
 })
@@ -129,6 +135,7 @@ apiRoutes.post('/tasks/:id/disable', async (c) => {
 })
 
 apiRoutes.post('/tasks/:id/trigger', async (c) => {
+  if (c.req.header(RUN_HEADER)) throw new SafetyError('recursive task triggers are blocked')
   const runId = await service.triggerTask(c.env, c.req.param('id'))
   return runId ? c.json({ runId }, 202) : c.json({ error: 'not_found' }, 404)
 })
@@ -207,24 +214,37 @@ apiRoutes.get('/settings/runtime', async (c) => {
 })
 
 apiRoutes.put('/settings/runtime', async (c) => {
+  const expected = expectedVersion(c.req.raw)
   const body = runtimeSettingsSchema.safeParse(await jsonBody(c.req.raw))
   if (!body.success) throw new ValidationError(zodIssues(body.error))
   if (body.data.executionMode === 'queue' && !hasRunQueue(c.env)) {
     throw new ValidationError([{ path: 'executionMode', message: '当前部署没有配置 Queue，不能选择队列执行' }])
   }
-  const version = await putRuntimeSettings(c.env.DB, body.data, Date.now(), expectedVersion(c.req.raw))
+  const version = await putRuntimeSettings(c.env.DB, body.data, Date.now(), expected)
   if (version === null) throw new ConflictError()
   c.header('etag', `"${version}"`)
   return c.json({ settings: body.data, version })
 })
 
 apiRoutes.put('/settings/alert', async (c) => {
+  const expected = expectedVersion(c.req.raw)
   const body = alertSettingsSchema.safeParse(await jsonBody(c.req.raw))
   if (!body.success) throw new ValidationError(zodIssues(body.error))
-  const version = await putAlertSettings(c.env.DB, body.data, Date.now(), expectedVersion(c.req.raw))
+  const version = await putAlertSettings(c.env.DB, body.data, Date.now(), expected)
   if (version === null) throw new ConflictError()
   c.header('etag', `"${version}"`)
   return c.json({ alert: body.data, version })
+})
+
+
+apiRoutes.get('/settings/safety', async (c) => {
+  c.header('cache-control', 'no-store')
+  return c.json({ settings: await getSafetySettings(c.env.DB) })
+})
+apiRoutes.put('/settings/safety', async (c) => {
+  const parsed = safetySettingsSchema.safeParse(await jsonBody(c.req.raw))
+  if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
+  return c.json({ settings: await putSafetySettings(c.env.DB, parsed.data) })
 })
 
 export const api = new Hono<{ Bindings: CloudflareBindings }>()

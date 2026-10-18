@@ -14,8 +14,14 @@ import { createTaskRow, setRuntimeSettings, toSnapshot } from './helpers'
 afterEach(() => vi.restoreAllMocks())
 
 const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
-const call = (path: string, init: RequestInit = {}, e: CloudflareBindings = env) =>
-  app.request(`http://yunji-task.test/api${path}`, { ...init, headers: AUTH }, e)
+const call = async (path: string, init: RequestInit = {}, e: CloudflareBindings = env) => {
+    const headers = { ...AUTH }
+    if (init.method === 'PUT') {
+      const current = await app.request(`http://yunji-task.test/api${path}`, { headers }, e)
+      Object.assign(headers, { 'if-match': current.headers.get('etag') })
+    }
+    return app.request(`http://yunji-task.test/api${path}`, { ...init, headers }, e)
+  }
 
 const withoutQueue = (e: CloudflareBindings = env) =>
   Object.create(e, { RUN_QUEUE: { value: undefined } }) as CloudflareBindings

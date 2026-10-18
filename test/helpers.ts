@@ -4,11 +4,11 @@ import type { RunMessage } from '../src/domain/runs-repo'
 import { taskInputSchema, toSnapshot, type ScheduleSnapshot, type TaskInputRaw } from '../src/domain/task'
 import { insertTask } from '../src/domain/tasks-repo'
 import type { TaskScheduler } from '../src/scheduler/task-scheduler'
-import { putRuntimeSettings } from '../src/domain/settings'
+import { getRuntimeSettingsState, putRuntimeSettings } from '../src/domain/settings'
 import { DEFAULT_RUNTIME_SETTINGS, type RuntimeSettings } from '../src/shared/types'
 
 export async function setRuntimeSettings(overrides: Partial<RuntimeSettings>) {
-  await putRuntimeSettings(env.DB, { ...DEFAULT_RUNTIME_SETTINGS, executionMode: 'queue', ...overrides }, Date.now())
+  await putRuntimeSettings(env.DB, { ...DEFAULT_RUNTIME_SETTINGS, executionMode: 'queue', ...overrides }, Date.now(), (await getRuntimeSettingsState(env.DB)).version)
 }
 
 export function taskInput(overrides: Partial<TaskInputRaw> = {}) {

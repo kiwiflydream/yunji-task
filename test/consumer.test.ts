@@ -2,7 +2,7 @@ import { createExecutionContext, createMessageBatch, getQueueResult, runDurableO
 import { env } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getRun, type RunMessage } from '../src/domain/runs-repo'
-import { putAlertSettings } from '../src/domain/settings'
+import { getAlertSettingsState, putAlertSettings } from '../src/domain/settings'
 import { upsertVariable } from '../src/domain/variables'
 import { handleRunBatch, processRun } from '../src/executor/consumer'
 import worker from '../src/index'
@@ -165,8 +165,7 @@ describe('processRun', () => {
     await putAlertSettings(
       env.DB,
       { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '{"text":"{{task.name}} #{{run.attempt}}: {{run.error}}"}', senderChannelGroup: '' },
-      Date.now(),
-    )
+      Date.now(), (await getAlertSettingsState(env.DB)).version)
     const task = await createTaskRow({ name: 'nightly "sync"', retry: { count: 1, intervalSeconds: 1 } })
     const calls = mockFetch((req) =>
       req.url.startsWith('https://alerts.test') ? new Response('ok') : new Response('boom', { status: 500 }),
@@ -187,7 +186,7 @@ describe('processRun', () => {
   })
 
   it('task alert "off" suppresses the global alert', async () => {
-    await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '', senderChannelGroup: '' }, Date.now())
+    await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '', senderChannelGroup: '' }, Date.now(), (await getAlertSettingsState(env.DB)).version)
     const task = await createTaskRow({ alert: { mode: 'off' } })
     const calls = mockFetch(() => new Response('', { status: 500 }))
     await processRun(message(task.id), envWithQueue().env)
@@ -297,7 +296,7 @@ describe('orphan scheduler', () => {
     })
     expect(await runDurableObjectAlarm(stub)).toBe(true)
     await vi.waitFor(async () => {
-      expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null })
+      expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
     })
   })
 
@@ -312,6 +311,6 @@ describe('orphan scheduler', () => {
     })
     expect((await stub.status()).alarmAt).not.toBeNull()
     await processRun(message(taskId, { trigger: 'schedule' }), envWithQueue().env)
-    expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null })
+    expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
   })
 })

@@ -1,14 +1,12 @@
 import { env } from 'cloudflare:workers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app } from '../src/app'
-import { putAlertSettings } from '../src/domain/settings'
+import { getAlertSettingsState, putAlertSettings } from '../src/domain/settings'
 import type { AlertSettings } from '../src/shared/types'
 import { resolveAlertTarget, sendFailureAlert, senderAlertMessage, type FailedRun } from '../src/executor/alert'
 import { processRun } from '../src/executor/consumer'
-import { deliverAction } from '../src/executor/actions'
-import type { RunAction } from '../src/domain/actions-repo'
 import type { SenderService } from '../src/executor/sender'
-import { claimRun, recordAttempt, type RunMessage } from '../src/domain/runs-repo'
+import type { RunMessage } from '../src/domain/runs-repo'
 import { taskInputSchema } from '../src/domain/task'
 import { emptyTaskForm, formToPayload, mapIssues, taskToForm } from '../web/src/lib/task-form'
 import { createTaskRow } from './helpers'
@@ -42,8 +40,8 @@ const run: FailedRun = {
   finishedAt: Date.UTC(2026, 9, 17, 1, 2, 3),
 }
 
-const settings = (s: { mode: AlertSettings['mode']; url?: string; senderChannelGroup?: string }) =>
-  putAlertSettings(env.DB, { mode: s.mode, url: s.url ?? '', bodyTemplate: '', senderChannelGroup: s.senderChannelGroup ?? '' }, Date.now())
+const settings = async (s: { mode: AlertSettings['mode']; url?: string; senderChannelGroup?: string }) =>
+  putAlertSettings(env.DB, { mode: s.mode, url: s.url ?? '', bodyTemplate: '', senderChannelGroup: s.senderChannelGroup ?? '' }, Date.now(), (await getAlertSettingsState(env.DB)).version)
 
 describe('resolveAlertTarget', () => {
   const task = (alert: any) => ({ id: 't', name: 'n', alert })
@@ -129,7 +127,7 @@ describe('failed runs', () => {
 })
 
 describe('validation and UI mapping', () => {
-  const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
+  const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json', 'if-match': '"0"' }
 
   it('validates channel groups in settings and task alerts', async () => {
     const bad = await app.request('http://x/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'sender', senderChannelGroup: 'Ops Alert' }) }, env)
@@ -168,68 +166,21 @@ describe('validation and UI mapping', () => {
   })
 })
 
-describe('legacy sender configuration compatibility', () => {
-  const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
-
-  it('reads old global settings with a canonical channel group and unchanged version', async () => {
-    await env.DB.prepare('INSERT INTO settings (key, value, version, updated_at) VALUES (?, ?, ?, ?)')
-      .bind('alert', JSON.stringify({ mode: 'sender', senderTopic: 'legacy-ops', url: '', bodyTemplate: '' }), 7, Date.now()).run()
-    const response = await app.request('/api/settings/alert', { headers: AUTH }, env)
-    expect(response.headers.get('ETag')).toBe('"7"')
-    const body = await response.json() as { alert: unknown; version: number }
-    expect(body).toMatchObject({ alert: { mode: 'sender', senderChannelGroup: 'legacy-ops' }, version: 7 })
-    expect(body.alert).not.toHaveProperty('senderTopic')
-    const { env: withSender, calls } = envWithSender()
-    await sendFailureAlert(withSender, { id: 't', name: 'n', alert: { mode: 'inherit' } }, run)
-    expect(calls[0].input.channelGroup).toBe('legacy-ops')
+describe('canonical sender configuration', () => {
+  it('rejects removed task aliases instead of converting or ignoring them', () => {
+    expect(taskInputSchema.safeParse({ ...baseTask, alert: { mode: 'sender', topic: 'old' } }).success).toBe(false)
+    expect(taskInputSchema.safeParse({ ...baseTask, alert: { mode: 'sender', topic: 'old', channelGroup: 'new' } }).success).toBe(false)
+    expect(taskInputSchema.parse({ ...baseTask, alert: { mode: 'sender', channelGroup: 'new' } }).alert).toEqual({ mode: 'sender', channelGroup: 'new' })
   })
 
-  it('normalizes persisted task alerts before returning them to the editor', async () => {
-    const task = await createTaskRow()
-    await env.DB.prepare('UPDATE tasks SET alert_config = ? WHERE id = ?')
-      .bind(JSON.stringify({ mode: 'sender', topic: 'legacy-task' }), task.id).run()
-    const response = await app.request(`/api/tasks/${task.id}`, { headers: AUTH }, env)
-    const { task: loaded } = await response.json() as { task: typeof task }
-    expect(loaded.alert).toEqual({ mode: 'sender', channelGroup: 'legacy-task' })
-    expect(loaded.version).toBe(task.version)
-    expect(taskToForm(loaded).alertChannelGroup).toBe('legacy-task')
-  })
-
-  it('delivers an old persisted outbox snapshot using the new RPC field and original idempotency key', async () => {
-    const task = await createTaskRow()
-    const now = Date.now()
-    const runId = crypto.randomUUID()
-    const msg: RunMessage = { runId, taskId: task.id, trigger: 'manual', scheduledAt: now, attempt: 1 }
-    await claimRun(env.DB, msg, now)
-    const action = {
-      id: `${runId}:alert`, taskId: task.id, runId, dueAt: now, attempts: 0,
-      payload: { kind: 'alert', task: { id: task.id, name: task.name, alert: { mode: 'sender', topic: 'legacy-pending' } }, run: { ...run, id: runId, attempt: 1 } },
-    } as unknown as RunAction
-    await recordAttempt(env.DB, runId, 'failed', { httpStatus: 502, responseBody: '', error: 'HTTP 502', durationMs: 1 }, now, action)
-    const { env: withSender, calls } = envWithSender()
-    await deliverAction(action.id, withSender)
-    expect(calls).toHaveLength(1)
-    expect(calls[0].input.channelGroup).toBe('legacy-pending')
-    expect(calls[0].input).not.toHaveProperty('topic')
-    expect(calls[0].options?.idempotencyKey).toBe(`yunji-task:alert:${runId}`)
-    expect(await env.DB.prepare('SELECT id FROM run_actions WHERE id = ?').bind(action.id).first()).toBeNull()
-  })
-
-  it('accepts legacy request aliases but gives explicit new fields precedence', async () => {
-    const parsed = taskInputSchema.parse({ ...baseTask, alert: { mode: 'sender', topic: 'old' } })
-    expect(parsed.alert).toEqual({ mode: 'sender', channelGroup: 'old' })
-    expect(taskInputSchema.parse({ ...baseTask, alert: { mode: 'sender', topic: 'old', channelGroup: 'new' } }).alert)
-      .toEqual({ mode: 'sender', channelGroup: 'new' })
-    expect(taskInputSchema.safeParse({ ...baseTask, alert: { mode: 'sender', topic: 'old', channelGroup: '' } }).success).toBe(false)
-    const legacy = await app.request('/api/settings/alert', { method: 'PUT', headers: AUTH,
-      body: JSON.stringify({ mode: 'sender', senderTopic: 'old' }) }, env)
-    expect(await legacy.json()).toMatchObject({ alert: { senderChannelGroup: 'old' } })
-    const current = await app.request('/api/settings/alert', { method: 'PUT', headers: AUTH,
-      body: JSON.stringify({ mode: 'sender', senderTopic: 'old', senderChannelGroup: 'new' }) }, env)
-    expect(await current.json()).toMatchObject({ alert: { senderChannelGroup: 'new' } })
-    const invalid = await app.request('/api/settings/alert', { method: 'PUT', headers: AUTH,
-      body: JSON.stringify({ mode: 'sender', senderTopic: 'old', senderChannelGroup: '' }) }, env)
-    expect(invalid.status).toBe(422)
+  it('rejects removed global aliases with a valid version precondition', async () => {
+    const AUTH = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json', 'if-match': '"0"' }
+    for (const body of [{ mode: 'sender', senderTopic: 'old' }, { mode: 'sender', senderTopic: 'old', senderChannelGroup: 'new' }]) {
+      const res = await app.request('/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify(body) }, env)
+      expect(res.status).toBe(422)
+    }
+    const res = await app.request('/api/settings/alert', { method: 'PUT', headers: AUTH, body: JSON.stringify({ mode: 'sender', senderChannelGroup: 'new' }) }, env)
+    expect(res.status).toBe(200)
   })
 })
 

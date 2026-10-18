@@ -28,7 +28,8 @@ describe('configuration compare-and-set', () => {
   })
 
   it('rejects a stale runtime save without shortening the saved retention', async () => {
-    const first = await call('/settings/runtime', 'PUT', { executionMode: 'worker', retentionDays: 30, statsRetentionDays: 90 })
+    const initial = await (await call('/settings/runtime')).json() as { version: number }
+    const first = await call('/settings/runtime', 'PUT', { executionMode: 'worker', retentionDays: 30, statsRetentionDays: 90 }, initial.version)
     const state = await first.json() as { version: number }
     expect(state.version).toEqual(expect.any(Number))
     expect(first.headers.get('etag')).toBe(`"${state.version}"`)
@@ -75,4 +76,18 @@ describe('variable creation', () => {
     const responses = await Promise.all(['first', 'second'].map(value => call('/variables/SAME_NAME', 'POST', { value })))
     expect(responses.map(r => r.status).sort()).toEqual([204, 409])
   })
+})
+
+it.each(['task', 'runtime', 'alert'])('requires If-Match for %s updates without changing state', async (surface) => {
+  const { task } = await (await call('/tasks', 'POST', input)).json() as { task: { id: string } }
+  const path = surface === 'task' ? `/tasks/${task.id}` : `/settings/${surface}`
+  const payload = surface === 'task' ? { ...input, name: 'must not replace' }
+    : surface === 'runtime' ? { executionMode: 'direct', retentionDays: 5, statsRetentionDays: 10 }
+      : { mode: 'off', url: '', bodyTemplate: '', senderChannelGroup: '' }
+  const before = await call(path)
+  const original = await before.json()
+  expect((await call(path, 'PUT', payload)).status).toBe(428)
+  expect(await (await call(path)).json()).toEqual(original)
+  const version = Number(before.headers.get('etag')!.replaceAll('"', ''))
+  expect((await call(path, 'PUT', payload, version)).status).toBe(200)
 })

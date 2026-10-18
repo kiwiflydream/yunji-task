@@ -19,30 +19,21 @@ export async function getRuntimeSettingsState(db: D1Database): Promise<{ setting
 }
 
 /** A zero revision means the setting has not been saved yet. Null means a stale writer. */
-async function writeSetting(db: D1Database, key: string, value: unknown, now: number, expectedVersion?: number): Promise<number | null> {
+async function writeSetting(db: D1Database, key: string, value: unknown, now: number, expectedVersion: number): Promise<number | null> {
   const encoded = JSON.stringify(value)
-  const statement = expectedVersion === undefined
+  const statement = expectedVersion === 0
     ? db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at,
-          version = settings.version + 1 RETURNING version`).bind(key, encoded, now)
-    : expectedVersion === 0
-      ? db.prepare(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
           ON CONFLICT (key) DO NOTHING RETURNING version`).bind(key, encoded, now)
-      : db.prepare(`UPDATE settings SET value = ?, updated_at = ?, version = version + 1
+    : db.prepare(`UPDATE settings SET value = ?, updated_at = ?, version = version + 1
           WHERE key = ? AND version = ? RETURNING version`).bind(encoded, now, key, expectedVersion)
   return (await statement.first<{ version: number }>())?.version ?? null
 }
 
-export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettings, now: number, expectedVersion?: number): Promise<number | null> {
+export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettings, now: number, expectedVersion: number): Promise<number | null> {
   return writeSetting(db, 'runtime', settings, now, expectedVersion)
 }
 
-export const alertSettingsSchema = z.preprocess((value) => {
-  if (value && typeof value === 'object' && 'senderTopic' in value && !('senderChannelGroup' in value)) {
-    return { ...value, senderChannelGroup: value.senderTopic }
-  }
-  return value
-}, z.object({
+export const alertSettingsSchema = z.strictObject({
   mode: z.enum(['webhook', 'sender', 'off']).default('webhook'),
   url: z.string().trim().max(2048).default(''),
   bodyTemplate: z.string().max(8000).default(BARK_ALERT_TEMPLATE),
@@ -51,7 +42,7 @@ export const alertSettingsSchema = z.preprocess((value) => {
   if (settings.mode === 'sender' && !SENDER_CHANNEL_GROUP_RE.test(settings.senderChannelGroup)) {
     ctx.addIssue({ code: 'custom', path: ['senderChannelGroup'], message: '请填写渠道组标识，只能包含小写字母、数字、点、下划线和连字符，最长 64 个字符' })
   }
-}))
+})
 
 export type AlertSettings = z.output<typeof alertSettingsSchema>
 
@@ -64,6 +55,6 @@ export async function getAlertSettingsState(db: D1Database): Promise<{ alert: Al
   return { alert: alertSettingsSchema.parse(row ? JSON.parse(row.value) : {}), version: row?.version ?? 0 }
 }
 
-export async function putAlertSettings(db: D1Database, settings: AlertSettings, now: number, expectedVersion?: number): Promise<number | null> {
+export async function putAlertSettings(db: D1Database, settings: AlertSettings, now: number, expectedVersion: number): Promise<number | null> {
   return writeSetting(db, 'alert', settings, now, expectedVersion)
 }
