@@ -296,7 +296,7 @@ describe('orphan scheduler', () => {
     })
     expect(await runDurableObjectAlarm(stub)).toBe(true)
     await vi.waitFor(async () => {
-      expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
+      expect(await stub.status()).toEqual({ dispatchFailures: 0, version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
     })
   })
 
@@ -311,6 +311,6 @@ describe('orphan scheduler', () => {
     })
     expect((await stub.status()).alarmAt).not.toBeNull()
     await processRun(message(taskId, { trigger: 'schedule' }), envWithQueue().env)
-    expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
+    expect(await stub.status()).toEqual({ dispatchFailures: 0, version: null, alarmAt: null, running: null, terminalPending: 0, terminalExhausted: 0 })
   })
 })

@@ -85,11 +85,11 @@ export async function purgeOldStats(db: D1Database, cutoff: number): Promise<num
   const res = await db
     .prepare(
       `DELETE FROM run_stats WHERE (task_id, bucket) IN
-       (SELECT task_id, bucket FROM run_stats WHERE bucket < ? LIMIT ${STATS_PURGE_BATCH})`,
+       (SELECT task_id, bucket FROM run_stats WHERE bucket < ? LIMIT ${STATS_PURGE_BATCH}) RETURNING task_id`,
     )
     .bind(cutoff)
-    .run()
-  return res.meta.changes
+    .all()
+  return res.results.length
 }
 
 type AggRow = Record<string, number>
@@ -115,43 +115,43 @@ function rowToAgg(r: AggRow): Agg {
   return agg
 }
 
-/** Merge minutes in D1 so a request returns at most one row per chart point. */
+/** Use whole UTC hours plus exact minute edges (including half-hour timezones).
+ * Each UNION branch has a bounded index range; filtering minute rows after a
+ * full-window scan would defeat the rollup.
+ */
+function slices(taskId?: string) {
+  const filter = taskId === undefined ? '' : ' AND s.task_id = ?'
+  const cols = ['task_id', ...SUM_COLS, ...MAX_COLS].map((c) => `s.${c}`).join(',')
+  const ceil = `CAST((p.start + ${HOUR_MS - 1}) / ${HOUR_MS} AS INTEGER) * ${HOUR_MS}`
+  const floor = `CAST(p.end / ${HOUR_MS} AS INTEGER) * ${HOUR_MS}`
+  return `SELECT p.start,${cols} FROM periods p JOIN run_stats_hourly s
+      ON s.bucket >= ${ceil} AND s.bucket < ${floor}${filter}
+    UNION ALL SELECT p.start,${cols} FROM periods p JOIN run_stats s
+      ON s.bucket >= p.start AND s.bucket < MIN(p.end,${ceil})${filter}
+    UNION ALL SELECT p.start,${cols} FROM periods p JOIN run_stats s
+      ON s.bucket >= MAX(${ceil},${floor}) AND s.bucket < p.end${filter}`
+}
+
 export async function statsForWindow(
   db: D1Database,
   window: StatsWindow,
   taskId?: string,
 ): Promise<{ start: number; agg: Agg }[]> {
-  const taskFilter = taskId === undefined ? '' : 'AND s.task_id = ?'
-  const taskParams = taskId === undefined ? [] : [taskId]
-  const stmt = window.granularity === 'hour'
-    ? db.prepare(
-        `SELECT s.bucket - s.bucket % ${HOUR_MS} AS start, ${aggSelect('s.')}
-         FROM run_stats s WHERE s.bucket >= ? AND s.bucket <= ? ${taskFilter} GROUP BY start`,
-      ).bind(window.from, window.to, ...taskParams)
-    : db.prepare(
-        `WITH starts(start) AS (VALUES ${window.buckets.map(() => '(?)').join(', ')}),
-         periods AS (SELECT start, LEAD(start, 1, ?) OVER (ORDER BY start) AS end FROM starts)
-         SELECT p.start, ${aggSelect('s.')} FROM periods p JOIN run_stats s
-           ON s.bucket >= p.start AND s.bucket < p.end ${taskFilter}
-         GROUP BY p.start`,
-      ).bind(...window.buckets, window.to + 1, ...taskParams)
-  const { results } = await stmt.all<AggRow>()
+  const taskParams = taskId === undefined ? [] : [taskId, taskId, taskId]
+  const { results } = await db.prepare(`
+    WITH starts(start) AS (SELECT CAST(value AS INTEGER) FROM json_each(?)),
+    periods AS (SELECT start, LEAD(start,1,?) OVER (ORDER BY start) AS end FROM starts),
+    pieces AS (${slices(taskId)})
+    SELECT start,${aggSelect()} FROM pieces GROUP BY start
+  `).bind(JSON.stringify(window.buckets), window.to + 1, ...taskParams).all<AggRow>()
   return results.map((r) => ({ start: r.start, agg: rowToAgg(r) }))
 }
 
-/** Aggregates per existing task in [from, to]. */
-export async function statsByTask(
-  db: D1Database,
-  from: number,
-  to: number,
-): Promise<{ taskId: string; name: string; agg: Agg }[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT s.task_id, t.name, ${aggSelect('s.')}
-       FROM run_stats s JOIN tasks t ON t.id = s.task_id
-       WHERE s.bucket >= ? AND s.bucket <= ? GROUP BY s.task_id`,
-    )
-    .bind(from, to)
-    .all<AggRow & { task_id: string; name: string }>()
+/** Aggregates per existing task in [from, to], without rereading every minute. */
+export async function statsByTask(db: D1Database, from: number, to: number): Promise<{ taskId: string; name: string; agg: Agg }[]> {
+  const { results } = await db.prepare(`WITH periods(start,end) AS (VALUES(?,?)),
+    pieces AS (${slices()})
+    SELECT s.task_id,t.name,${aggSelect('s.')} FROM pieces s JOIN tasks t ON t.id=s.task_id GROUP BY s.task_id
+  `).bind(from, to + 1).all<AggRow & { task_id: string; name: string }>()
   return results.map((r) => ({ taskId: r.task_id, name: r.name, agg: rowToAgg(r) }))
 }

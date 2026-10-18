@@ -1,3 +1,7 @@
+import { SafetyError } from './safety'
+
+export const MAX_TASKS = 1000
+export const TASK_CREATES_PER_MINUTE = 30
 import { rowToTask, type Task, type TaskInput, type TaskRow, type TaskSummary } from './task'
 import { deleteTaskStatsStatement } from './stats-repo'
 
@@ -41,19 +45,30 @@ export async function getTask(db: D1Database, id: string): Promise<Task | null> 
 export async function insertTask(db: D1Database, input: TaskInput, now: number): Promise<Task> {
   const id = crypto.randomUUID()
   const c = columns(input)
-  const row = await db
-    .prepare(
+  const statement = db.prepare(
       `INSERT INTO tasks (id, name, description, enabled, schedule_type, cron, timezone, run_at,
         executor_type, executor_config, overlap_policy, retry_count, retry_interval_seconds, alert_config,
         execution_mode, version, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?) RETURNING *`,
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM resource_budgets WHERE name='task-create'
+         AND (window>? OR (window=? AND count>=${TASK_CREATES_PER_MINUTE})))
+         AND (SELECT COUNT(*) FROM tasks) < ${MAX_TASKS}
+       RETURNING *`,
     )
     .bind(
       id, c.name, c.description, c.enabled, c.schedule_type, c.cron, c.timezone, c.run_at,
       c.executor_type, c.executor_config, c.overlap_policy, c.retry_count, c.retry_interval_seconds, c.alert_config,
-      c.execution_mode, now, now,
+      c.execution_mode, now, now, Math.floor(now / 60000), Math.floor(now / 60000),
     )
-    .first<TaskRow>()
+  const [result] = await db.batch<TaskRow>([
+    statement,
+    db.prepare(`INSERT INTO resource_budgets(name,window,count)
+      SELECT 'task-create',?,1 WHERE changes()=1
+      ON CONFLICT(name) DO UPDATE SET window=excluded.window,
+        count=CASE WHEN window=excluded.window THEN count+1 ELSE 1 END`).bind(Math.floor(now / 60000)),
+  ])
+  const row = result.results[0]
+  if (!row) throw new SafetyError('task creation limit reached (1000 tasks, 30 creations per minute)')
   return rowToTask(row!)
 }
 
@@ -104,8 +119,8 @@ export async function deleteTask(db: D1Database, id: string): Promise<boolean> {
   return res.meta.changes > 0
 }
 
-export async function listAllTasks(db: D1Database, onlyUnsynced = false): Promise<Task[]> {
-  const { results } = await db.prepare(`SELECT * FROM tasks${onlyUnsynced ? ' WHERE scheduler_synced_version < version' : ''}`).all<TaskRow>()
+export async function listAllTasks(db: D1Database, onlyUnsynced = false, after = '', limit = MAX_TASKS): Promise<Task[]> {
+  const { results } = await db.prepare(`SELECT * FROM tasks WHERE id > ?${onlyUnsynced ? ' AND scheduler_synced_version < version' : ''} ORDER BY id LIMIT ?`).bind(after, limit).all<TaskRow>()
   return results.map(rowToTask)
 }
 
@@ -121,7 +136,7 @@ export async function markSchedulerUnsynced(db: D1Database, id: string, version:
   ).bind(id, version).run()
 }
 
-export async function listTaskIds(db: D1Database): Promise<string[]> {
-  const { results } = await db.prepare('SELECT id FROM tasks').all<{ id: string }>()
+export async function listTaskIds(db: D1Database, after = '', limit = MAX_TASKS): Promise<string[]> {
+  const { results } = await db.prepare('SELECT id FROM tasks WHERE id > ? ORDER BY id LIMIT ?').bind(after, limit).all<{ id: string }>()
   return results.map((row) => row.id)
 }

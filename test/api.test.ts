@@ -145,6 +145,7 @@ describe('tasks API', () => {
     expect((await call(`/tasks/${task.id}`, { method: 'DELETE' })).status).toBe(204)
     expect((await call(`/tasks/${task.id}`)).status).toBe(404)
     expect(await env.TASK_SCHEDULER.getByName(task.id).status()).toEqual({
+      dispatchFailures: 0,
       version: null,
       alarmAt: null,
       running: null,

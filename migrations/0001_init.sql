@@ -134,3 +134,62 @@ CREATE TABLE execution_budget_totals (
   count INTEGER NOT NULL,
   PRIMARY KEY(day, kind)
 ) WITHOUT ROWID;
+
+CREATE TABLE resource_budgets (
+  name TEXT PRIMARY KEY,
+  window INTEGER NOT NULL,
+  count INTEGER NOT NULL
+) WITHOUT ROWID;
+
+CREATE TABLE stats_cache (
+  key TEXT PRIMARY KEY,
+  value TEXT,
+  expires_at INTEGER NOT NULL,
+  lease_until INTEGER NOT NULL,
+  owner TEXT NOT NULL
+) WITHOUT ROWID;
+CREATE INDEX idx_stats_cache_expiry ON stats_cache(expires_at);
+
+-- Transactional hour rollups bound long-range dashboard reads.
+CREATE TABLE run_stats_hourly (
+  task_id TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  success INTEGER NOT NULL DEFAULT 0,
+  failed INTEGER NOT NULL DEFAULT 0,
+  skipped INTEGER NOT NULL DEFAULT 0,
+  duration_count INTEGER NOT NULL DEFAULT 0,
+  duration_sum INTEGER NOT NULL DEFAULT 0,
+  duration_max INTEGER NOT NULL DEFAULT 0,
+  dur_b0 INTEGER NOT NULL DEFAULT 0,
+  dur_b1 INTEGER NOT NULL DEFAULT 0,
+  dur_b2 INTEGER NOT NULL DEFAULT 0,
+  dur_b3 INTEGER NOT NULL DEFAULT 0,
+  dur_b4 INTEGER NOT NULL DEFAULT 0,
+  dur_b5 INTEGER NOT NULL DEFAULT 0,
+  dur_b6 INTEGER NOT NULL DEFAULT 0,
+  dur_b7 INTEGER NOT NULL DEFAULT 0,
+  dur_b8 INTEGER NOT NULL DEFAULT 0,
+  dur_b9 INTEGER NOT NULL DEFAULT 0,
+  dur_b10 INTEGER NOT NULL DEFAULT 0,
+  delay_count INTEGER NOT NULL DEFAULT 0,
+  delay_sum INTEGER NOT NULL DEFAULT 0,
+  delay_max INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (task_id, bucket)
+) WITHOUT ROWID;
+
+CREATE INDEX idx_run_stats_hourly_bucket ON run_stats_hourly(bucket);
+CREATE TRIGGER stats_hourly_insert AFTER INSERT ON run_stats BEGIN
+  INSERT INTO run_stats_hourly(task_id,bucket,success,failed,skipped,duration_count,duration_sum,dur_b0,dur_b1,dur_b2,dur_b3,dur_b4,dur_b5,dur_b6,dur_b7,dur_b8,dur_b9,dur_b10,delay_count,delay_sum,duration_max,delay_max)
+  VALUES(NEW.task_id,NEW.bucket-NEW.bucket%3600000,NEW.success,NEW.failed,NEW.skipped,NEW.duration_count,NEW.duration_sum,NEW.dur_b0,NEW.dur_b1,NEW.dur_b2,NEW.dur_b3,NEW.dur_b4,NEW.dur_b5,NEW.dur_b6,NEW.dur_b7,NEW.dur_b8,NEW.dur_b9,NEW.dur_b10,NEW.delay_count,NEW.delay_sum,NEW.duration_max,NEW.delay_max)
+  ON CONFLICT(task_id,bucket) DO UPDATE SET success=success+excluded.success,failed=failed+excluded.failed,skipped=skipped+excluded.skipped,duration_count=duration_count+excluded.duration_count,duration_sum=duration_sum+excluded.duration_sum,dur_b0=dur_b0+excluded.dur_b0,dur_b1=dur_b1+excluded.dur_b1,dur_b2=dur_b2+excluded.dur_b2,dur_b3=dur_b3+excluded.dur_b3,dur_b4=dur_b4+excluded.dur_b4,dur_b5=dur_b5+excluded.dur_b5,dur_b6=dur_b6+excluded.dur_b6,dur_b7=dur_b7+excluded.dur_b7,dur_b8=dur_b8+excluded.dur_b8,dur_b9=dur_b9+excluded.dur_b9,dur_b10=dur_b10+excluded.dur_b10,delay_count=delay_count+excluded.delay_count,delay_sum=delay_sum+excluded.delay_sum,duration_max=MAX(duration_max,excluded.duration_max),delay_max=MAX(delay_max,excluded.delay_max);
+END;
+CREATE TRIGGER stats_hourly_update AFTER UPDATE ON run_stats BEGIN
+  INSERT INTO run_stats_hourly(task_id,bucket,success,failed,skipped,duration_count,duration_sum,dur_b0,dur_b1,dur_b2,dur_b3,dur_b4,dur_b5,dur_b6,dur_b7,dur_b8,dur_b9,dur_b10,delay_count,delay_sum,duration_max,delay_max)
+  VALUES(NEW.task_id,NEW.bucket-NEW.bucket%3600000,NEW.success-OLD.success,NEW.failed-OLD.failed,NEW.skipped-OLD.skipped,NEW.duration_count-OLD.duration_count,NEW.duration_sum-OLD.duration_sum,NEW.dur_b0-OLD.dur_b0,NEW.dur_b1-OLD.dur_b1,NEW.dur_b2-OLD.dur_b2,NEW.dur_b3-OLD.dur_b3,NEW.dur_b4-OLD.dur_b4,NEW.dur_b5-OLD.dur_b5,NEW.dur_b6-OLD.dur_b6,NEW.dur_b7-OLD.dur_b7,NEW.dur_b8-OLD.dur_b8,NEW.dur_b9-OLD.dur_b9,NEW.dur_b10-OLD.dur_b10,NEW.delay_count-OLD.delay_count,NEW.delay_sum-OLD.delay_sum,NEW.duration_max,NEW.delay_max)
+  ON CONFLICT(task_id,bucket) DO UPDATE SET success=success+excluded.success,failed=failed+excluded.failed,skipped=skipped+excluded.skipped,duration_count=duration_count+excluded.duration_count,duration_sum=duration_sum+excluded.duration_sum,dur_b0=dur_b0+excluded.dur_b0,dur_b1=dur_b1+excluded.dur_b1,dur_b2=dur_b2+excluded.dur_b2,dur_b3=dur_b3+excluded.dur_b3,dur_b4=dur_b4+excluded.dur_b4,dur_b5=dur_b5+excluded.dur_b5,dur_b6=dur_b6+excluded.dur_b6,dur_b7=dur_b7+excluded.dur_b7,dur_b8=dur_b8+excluded.dur_b8,dur_b9=dur_b9+excluded.dur_b9,dur_b10=dur_b10+excluded.dur_b10,delay_count=delay_count+excluded.delay_count,delay_sum=delay_sum+excluded.delay_sum,duration_max=MAX(duration_max,excluded.duration_max),delay_max=MAX(delay_max,excluded.delay_max);
+END;
+CREATE TRIGGER stats_hourly_delete AFTER DELETE ON run_stats BEGIN
+  UPDATE run_stats_hourly SET success=success-OLD.success,failed=failed-OLD.failed,skipped=skipped-OLD.skipped,duration_count=duration_count-OLD.duration_count,duration_sum=duration_sum-OLD.duration_sum,dur_b0=dur_b0-OLD.dur_b0,dur_b1=dur_b1-OLD.dur_b1,dur_b2=dur_b2-OLD.dur_b2,dur_b3=dur_b3-OLD.dur_b3,dur_b4=dur_b4-OLD.dur_b4,dur_b5=dur_b5-OLD.dur_b5,dur_b6=dur_b6-OLD.dur_b6,dur_b7=dur_b7-OLD.dur_b7,dur_b8=dur_b8-OLD.dur_b8,dur_b9=dur_b9-OLD.dur_b9,dur_b10=dur_b10-OLD.dur_b10,delay_count=delay_count-OLD.delay_count,delay_sum=delay_sum-OLD.delay_sum,duration_max=COALESCE((SELECT MAX(duration_max) FROM run_stats WHERE task_id=OLD.task_id AND bucket>=OLD.bucket-OLD.bucket%3600000 AND bucket<OLD.bucket-OLD.bucket%3600000+3600000),0),delay_max=COALESCE((SELECT MAX(delay_max) FROM run_stats WHERE task_id=OLD.task_id AND bucket>=OLD.bucket-OLD.bucket%3600000 AND bucket<OLD.bucket-OLD.bucket%3600000+3600000),0)
+  WHERE task_id=OLD.task_id AND bucket=OLD.bucket-OLD.bucket%3600000;
+  DELETE FROM run_stats_hourly WHERE task_id=OLD.task_id AND bucket=OLD.bucket-OLD.bucket%3600000 AND success+failed+skipped=0;
+END;

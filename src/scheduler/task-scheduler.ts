@@ -16,6 +16,8 @@ export type { SchedulerStatus }
 
 const K_SNAPSHOT = 'snapshot'
 const K_NEXT = 'nextRunAt'
+const K_DISPATCH_FAILURES = 'dispatchFailures'
+const DISPATCH_FAILURE_LIMIT = 5
 const K_RUNNING = 'running'
 /** Version of a once task that already fired; it must never be re-armed. */
 const K_ONCE_FIRED = 'onceFiredVersion'
@@ -80,6 +82,10 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     await storage.transaction(async (txn) => {
       const current = await txn.get<ScheduleSnapshot>(K_SNAPSHOT)
       if (current && current.version > snapshot.version) return
+      const failures = await txn.get<number>(K_DISPATCH_FAILURES) ?? 0
+      // Reconciliation must not reopen a circuit. An explicit configuration version does.
+      if (current?.version === snapshot.version && failures >= DISPATCH_FAILURE_LIMIT) return
+      if (current?.version !== snapshot.version) await txn.delete(K_DISPATCH_FAILURES)
       const onceFired = await txn.get<number>(K_ONCE_FIRED)
       const firedThisVersion = snapshot.scheduleType === 'once' && onceFired === snapshot.version
       const [alarm, next] = await Promise.all([txn.getAlarm(), txn.get<number>(K_NEXT)])
@@ -228,7 +234,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       this.ctx.storage.get<RunningSlot>(K_RUNNING),
       this.terminalCleanups(),
     ])
-    return { terminalPending: terminal.length, terminalExhausted: terminal.filter((t) => t.attempts >= HANDOFF_MAX_ATTEMPTS).length, version: snapshot?.version ?? null, alarmAt, running: running ?? null }
+    return { dispatchFailures: await this.ctx.storage.get<number>(K_DISPATCH_FAILURES) ?? 0, terminalPending: terminal.length, terminalExhausted: terminal.filter((t) => t.attempts >= HANDOFF_MAX_ATTEMPTS).length, version: snapshot?.version ?? null, alarmAt, running: running ?? null }
   }
 
   async destroy(): Promise<void> {
@@ -336,6 +342,12 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     await this.rearm()
   }
 
+  private async clearDispatchFailures(version: number): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      if ((await txn.get<ScheduleSnapshot>(K_SNAPSHOT))?.version === version) await txn.delete(K_DISPATCH_FAILURES)
+    })
+  }
+
   /** Never throws (see alarm()). */
   private async dispatch(snapshot: ScheduleSnapshot, scheduledAt: number, now: number, runId = crypto.randomUUID(), resolvedMode?: ExecutionMode): Promise<boolean> {
     const storage = this.ctx.storage
@@ -354,6 +366,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
             { runId, taskId: snapshot.taskId, scheduledAt, reason: `previous run ${running.runId} still in progress` },
             now,
           )
+          await this.clearDispatchFailures(snapshot.version)
           return true
         }
       }
@@ -369,9 +382,11 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       if (skip) await storage.put(K_RUNNING, { runId: msg.runId, leaseUntil: now + snapshot.leaseMs })
       if (mode !== 'queue') {
         this.start({ msg, dueAt: now, deliveries: 0, mode })
+        await this.clearDispatchFailures(snapshot.version)
         return true
       }
       await this.sendToQueue({ msg, dueAt: now, deliveries: 0, mode, leaseMs: snapshot.leaseMs })
+      await this.clearDispatchFailures(snapshot.version)
       return true
     } catch (err) {
       console.error('dispatch failed', snapshot.taskId, err)
@@ -383,6 +398,17 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
         await this.rearm()
         await withDeadline(failRun(this.env.DB, { runId, taskId: snapshot.taskId, trigger: 'schedule', scheduledAt, attempt: 1 }, err.message))
         return true
+      }
+      if (snapshot.scheduleType === 'cron') {
+        await storage.transaction(async (txn) => {
+          const current = await txn.get<ScheduleSnapshot>(K_SNAPSHOT)
+          if (current?.version !== snapshot.version) return
+          const failures = (await txn.get<number>(K_DISPATCH_FAILURES) ?? 0) + 1
+          await txn.put(K_DISPATCH_FAILURES, failures)
+          await this.setNext(failures >= DISPATCH_FAILURE_LIMIT ? null
+            : nextFireTime(snapshot, Date.now() + 30_000 * 2 ** (failures - 1)), txn)
+          await this.rearm(txn)
+        })
       }
       return false
     }

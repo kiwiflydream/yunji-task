@@ -69,7 +69,7 @@ export function nextRunAt(task: Task, now: number): number | null {
 /** Push the D1 state to the task's DO. Failures are healed by the reconcile cron. */
 export async function syncScheduler(env: CloudflareBindings, task: Task): Promise<boolean> {
   try {
-    await env.TASK_SCHEDULER.getByName(task.id).sync(toSnapshot(task))
+    await withDeadline(env.TASK_SCHEDULER.getByName(task.id).sync(toSnapshot(task)))
     await repo.markSchedulerSynced(env.DB, task.id, task.version)
     return true
   } catch (err) {

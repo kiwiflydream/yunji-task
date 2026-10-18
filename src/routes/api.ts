@@ -1,3 +1,4 @@
+import { cachedStats } from '../domain/stats-cache'
 import { getSafetySettings, putSafetySettings, safetySettingsSchema, SafetyError, RUN_HEADER } from '../domain/safety'
 import { Hono } from 'hono'
 import { z } from 'zod'
@@ -159,17 +160,23 @@ apiRoutes.get('/tasks/:id/stats', async (c) => {
   const window = parseStatsQuery(c.req.query())
   const task = await getTask(c.env.DB, c.req.param('id'))
   if (!task) return c.json({ error: 'not_found' }, 404)
-  const { base, total } = await seriesFor(c.env.DB, window, task.id)
-  return c.json<TaskStats>({ ...base, histogram: histogram(total) })
+  const result = await cachedStats(c.env.DB, JSON.stringify(['task',task.id,window.range,window.buckets]), async () => {
+    const { base, total } = await seriesFor(c.env.DB, window, task.id)
+    return { ...base, histogram: histogram(total) }
+  })
+  return c.json<TaskStats>(result)
 })
 
 apiRoutes.get('/stats/overview', async (c) => {
   const window = parseStatsQuery(c.req.query())
-  const [{ base }, perTask] = await Promise.all([
-    seriesFor(c.env.DB, window),
-    statsByTask(c.env.DB, window.from, window.to),
-  ])
-  return c.json<StatsOverview>({ ...base, ...rankTasks(perTask) })
+  const result = await cachedStats(c.env.DB, JSON.stringify(['overview',window.range,window.buckets]), async () => {
+    const [{ base }, perTask] = await Promise.all([
+      seriesFor(c.env.DB, window),
+      statsByTask(c.env.DB, window.from, window.to),
+    ])
+    return { ...base, ...rankTasks(perTask) }
+  })
+  return c.json<StatsOverview>(result)
 })
 
 apiRoutes.get('/runs/:id', async (c) => {

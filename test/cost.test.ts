@@ -1,3 +1,5 @@
+import { statsForWindow } from '../src/domain/stats-repo'
+import { statsWindow } from '../src/domain/stats'
 // D1 bills every row written, including each index entry a write touches.
 // These tests pin the per-run write budget and the query plans that keep the
 // periodic sweeps off full table scans.
@@ -55,7 +57,7 @@ function meteredDb(db: D1Database) {
 const success = { httpStatus: 200, responseBody: 'ok', error: null, durationMs: 120 }
 
 describe('rows written per run', () => {
-  it('a successful run costs 3 (claim) + 1 (stats, +1 for the minute\'s first run) + 1 (result) + 1 (purge)', async () => {
+  it('a successful run pays for minute and hour aggregates without extra run indexes', async () => {
     const task = await createTaskRow()
     const { db, meter } = meteredDb(env.DB)
     const at = Date.UTC(2026, 9, 16, 9, 10)
@@ -74,20 +76,20 @@ describe('rows written per run', () => {
       })
     }
     expect(costs).toEqual([
-      { claim: 3, result: 3 }, // stats row insert + its time index, run update
-      { claim: 3, result: 2 },
+      { claim: 3, result: 5 }, // minute + hour rows and time indexes, run update
+      { claim: 3, result: 3 },
     ])
     expect(await write(() => purgeOldRuns(db, [task.id], Number.MAX_SAFE_INTEGER))).toBe(2)
   })
 
-  it('a skipped fire costs 2 (run row; never in the in-flight index) + 1 (stats)', async () => {
+  it('a skipped fire costs 2 (run row; never in the in-flight index) + 2 (minute and hour stats)', async () => {
     const task = await createTaskRow()
     const { db, meter } = meteredDb(env.DB)
     const at = Date.UTC(2026, 9, 16, 9, 20)
     await insertSkippedRun(db, { taskId: task.id, scheduledAt: at, reason: 'busy' }, at) // first of the minute
     const before = meter.written
     await insertSkippedRun(db, { taskId: task.id, scheduledAt: at + 1000, reason: 'busy' }, at + 1000)
-    expect(meter.written - before).toBe(3)
+    expect(meter.written - before).toBe(4)
   })
 })
 
@@ -233,4 +235,19 @@ describe('D1 read amplification regressions', () => {
     await expireActions(db, 45100)
     expect(await env.DB.prepare("SELECT failed_at FROM run_actions WHERE id='alert-last'").first('failed_at')).toBe(45100)
   })
+})
+
+
+it('reads hour rollups instead of all minute rows for a full-day chart', async () => {
+  const task = await createTaskRow()
+  const start = Date.UTC(2026, 9, 18)
+  const insert = env.DB.prepare('INSERT INTO run_stats(task_id,bucket,success) VALUES(?,?,1)')
+  for (let n = 0; n < 1440; n += 120) {
+    await env.DB.batch(Array.from({ length: 120 }, (_, i) => insert.bind(task.id, start + (n + i) * 60000)))
+  }
+  const { db, meter } = meteredDb(env.DB)
+  const rows = await statsForWindow(db, statsWindow('24h', start + 86400000 - 1, 'UTC'), task.id)
+  expect(rows.reduce((sum, r) => sum + r.agg.success, 0)).toBe(1440)
+  expect(rows).toHaveLength(24)
+  expect(meter.read).toBeLessThan(1440 / 4)
 })

@@ -37,6 +37,7 @@ export interface RunningSlot {
 }
 
 export interface SchedulerStatus {
+  dispatchFailures: number
   terminalPending: number
   terminalExhausted: number
   version: number | null
