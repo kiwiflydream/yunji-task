@@ -46,7 +46,7 @@ CREATE TABLE runs (
   updated_at INTEGER NOT NULL
 ) WITHOUT ROWID;
 
-CREATE INDEX idx_runs_task_created ON runs (task_id, created_at DESC);
+CREATE INDEX idx_runs_task_created ON runs (task_id, created_at DESC, id DESC);
 CREATE INDEX idx_runs_inflight ON runs (updated_at) WHERE status IN ('running', 'retrying');
 
 -- Durable handoffs created atomically with their run result.
@@ -60,9 +60,15 @@ CREATE TABLE run_actions (
   attempts INTEGER NOT NULL DEFAULT 0,
   lease_until INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
-  failed_at INTEGER
+  failed_at INTEGER,
+  -- An exhausted claim can terminate only after its lease ends.
+  terminal_at INTEGER GENERATED ALWAYS AS (
+    MAX(lease_until, CASE WHEN attempts >= CASE WHEN json_extract(payload, '$.kind') = 'alert' THEN 3 ELSE 10 END
+      THEN 0 ELSE expires_at END)
+  ) VIRTUAL
 ) WITHOUT ROWID;
 CREATE INDEX idx_run_actions_due ON run_actions (due_at) WHERE failed_at IS NULL;
+CREATE INDEX idx_run_actions_terminal ON run_actions (terminal_at) WHERE failed_at IS NULL;
 CREATE INDEX idx_run_actions_run ON run_actions (run_id);
 
 CREATE TABLE variables (
@@ -119,4 +125,12 @@ CREATE TABLE execution_budget (
   task_id TEXT NOT NULL,
   count INTEGER NOT NULL,
   PRIMARY KEY(day, kind, task_id)
+) WITHOUT ROWID;
+
+-- Kept atomically with task counters; admission never scans all tasks.
+CREATE TABLE execution_budget_totals (
+  day INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY(day, kind)
 ) WITHOUT ROWID;

@@ -13,7 +13,7 @@ import { deliverAction } from '../src/executor/actions'
 import { createTaskRow, toSnapshot } from './helpers'
 
 beforeEach(async () => {
-  await env.DB.batch([env.DB.prepare("DELETE FROM settings WHERE key='safety'"), env.DB.prepare('DELETE FROM execution_budget')])
+  await env.DB.batch([env.DB.prepare("DELETE FROM settings WHERE key='safety'"), env.DB.prepare('DELETE FROM execution_budget'), env.DB.prepare('DELETE FROM execution_budget_totals')])
 })
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
@@ -296,7 +296,7 @@ it('does not reset exhausted action handoffs when D1 terminal writes fail perman
 })
 
 it('a terminal cleanup alarm does not fire the next cron occurrence early', async () => {
-  const now = Date.UTC(2026, 9, 18, 8)
+  const now = (Math.floor(Date.now() / 86400000) + 1) * 86400000 + 8 * 3600000
   vi.spyOn(Date, 'now').mockReturnValue(now)
   const task = await createTaskRow({ schedule: { type: 'cron', cron: '0 0 9 * * *', timezone: 'UTC' } })
   const stub = env.TASK_SCHEDULER.getByName(task.id)
@@ -312,5 +312,49 @@ it('a terminal cleanup alarm does not fire the next cron occurrence early', asyn
   vi.mocked(Date.now).mockReturnValue(now + 1000)
   await runDurableObjectAlarm(stub)
   expect(send).not.toHaveBeenCalled()
-  expect((await stub.status()).alarmAt).toBe(Date.UTC(2026, 9, 18, 9))
+  expect((await stub.status()).alarmAt).toBe(now + 3600000)
+})
+
+it('does not charge global quota on a task rejection and isolates kinds and UTC days', async () => {
+  await safety({ taskDailyLimit: 1, globalDailyLimit: 2 })
+  const now = Date.UTC(2026, 9, 18)
+  await admit(env.DB, 'a', 'dispatch', now)
+  await expect(admit(env.DB, 'a', 'dispatch', now)).rejects.toThrow('budget exhausted')
+  await admit(env.DB, 'b', 'dispatch', now)
+  await expect(admit(env.DB, 'c', 'dispatch', now)).rejects.toThrow('budget exhausted')
+  await admit(env.DB, 'a', 'attempt', now)
+  await admit(env.DB, 'a', 'dispatch', now + 86400000)
+  const { results } = await env.DB.prepare('SELECT day,kind,count FROM execution_budget_totals ORDER BY day,kind').all()
+  expect(results).toEqual([
+    { day: now / 86400000, kind: 'attempt', count: 1 },
+    { day: now / 86400000, kind: 'dispatch', count: 2 },
+    { day: now / 86400000 + 1, kind: 'dispatch', count: 1 },
+  ])
+  expect(await env.DB.prepare("SELECT count FROM execution_budget WHERE task_id='c'").first()).toBeNull()
+})
+
+it('rolls back task quota if updating the global quota fails', async () => {
+  const now = Date.UTC(2026, 9, 18)
+  await admit(env.DB, 'a', 'dispatch', now)
+  const broken = {
+    prepare: env.DB.prepare.bind(env.DB),
+    batch: (statements: D1PreparedStatement[]) => env.DB.batch([
+      ...statements,
+      env.DB.prepare("INSERT INTO execution_budget_totals(day,kind,count) VALUES(0,'failure',NULL)"),
+    ]),
+  } as unknown as D1Database
+  await expect(admit(broken, 'a', 'dispatch', now)).rejects.toThrow()
+  expect(await env.DB.prepare("SELECT count FROM execution_budget WHERE task_id='a'").first('count')).toBe(1)
+  expect(await env.DB.prepare("SELECT count FROM execution_budget_totals WHERE kind='dispatch'").first('count')).toBe(1)
+})
+
+it('maintenance removes old task and global counters together without resetting recent quotas', async () => {
+  const now = Date.now()
+  for (const daysAgo of [0, 2, 3]) await admit(env.DB, 'retention-task', 'dispatch', now - daysAgo * 86400000)
+  await runMaintenance(env, now)
+  const day = Math.floor(now / 86400000)
+  const tasks = await env.DB.prepare('SELECT day,count FROM execution_budget ORDER BY day').all()
+  const totals = await env.DB.prepare('SELECT day,count FROM execution_budget_totals ORDER BY day').all()
+  expect(tasks.results).toEqual([{ day: day - 2, count: 1 }, { day, count: 1 }])
+  expect(totals.results).toEqual(tasks.results)
 })

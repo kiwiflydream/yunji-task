@@ -29,16 +29,23 @@ export async function putSafetySettings(db: D1Database, raw: unknown) {
 }
 
 /** Separate budgets bound both new dispatches and actual attempts (including retries).
- * One SQL statement admits atomically across all DOs and consumers. Failed sends
+ * One D1 batch admits atomically across all DOs and consumers. Failed sends
  * consume budget too; never refund an ambiguous network handoff.
  */
 export async function admit(db: D1Database, taskId: string, kind: 'dispatch' | 'attempt', now = Date.now()): Promise<void> {
   const settings = await getSafetySettings(db)
   if (settings.paused) throw new SafetyError('execution paused by safety switch', 'paused')
   const day = Math.floor(now / 86_400_000)
-  const res = await db.prepare(`INSERT INTO execution_budget(day,kind,task_id,count)
-    SELECT ?,?,?,1 WHERE COALESCE((SELECT SUM(count) FROM execution_budget WHERE day=? AND kind=?),0) < ?
-    ON CONFLICT(day,kind,task_id) DO UPDATE SET count=count+1 WHERE count < ?`)
-    .bind(day, kind, taskId, day, kind, settings.globalDailyLimit, settings.taskDailyLimit).run()
+  const [res] = await db.batch([
+    db.prepare(`INSERT INTO execution_budget(day,kind,task_id,count)
+      SELECT ?,?,?,1 WHERE COALESCE((SELECT count FROM execution_budget_totals WHERE day=? AND kind=?),0) < ?
+      ON CONFLICT(day,kind,task_id) DO UPDATE SET count=count+1 WHERE count < ?`)
+      .bind(day, kind, taskId, day, kind, settings.globalDailyLimit, settings.taskDailyLimit),
+    // changes() refers to the immediately preceding task UPSERT in this transaction.
+    // A rejected admission changes neither counter; any SQL failure rolls both back.
+    db.prepare(`INSERT INTO execution_budget_totals(day,kind,count)
+      SELECT ?,?,1 WHERE changes() = 1
+      ON CONFLICT(day,kind) DO UPDATE SET count=count+1`).bind(day, kind),
+  ])
   if (res.meta.changes === 0) throw new SafetyError('daily execution budget exhausted; resumes after UTC midnight')
 }

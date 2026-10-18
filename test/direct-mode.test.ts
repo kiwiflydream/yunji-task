@@ -155,7 +155,7 @@ describe('direct mode', () => {
     const task = await createTaskRow({ schedule: YEARLY, executionMode: 'direct' })
     const stub = env.TASK_SCHEDULER.getByName(task.id)
     await stub.sync(toSnapshot(task))
-    const brokenDb = { prepare: (sql: string) => sql.startsWith('SELECT * FROM tasks')
+    const brokenDb = { batch: env.DB.batch.bind(env.DB), prepare: (sql: string) => sql.startsWith('SELECT * FROM tasks')
       ? { bind: () => ({ first: () => Promise.reject(new Error('D1 is down')) }) }
       : env.DB.prepare(sql) }
     await useDirectMode(stub, { DB: brokenDb })

@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers'
 import { describe, expect, it, vi } from 'vitest'
 import {
   claimRun,
+  listRuns,
   getRun,
   insertSkippedRun,
   LOST_WHERE,
@@ -13,16 +14,19 @@ import {
   purgeOldRuns,
   recordAttempt,
 } from '../src/domain/runs-repo'
+import { admit } from '../src/domain/safety'
+import { claimAction, expireActions } from '../src/domain/actions-repo'
 import { deleteTask } from '../src/domain/tasks-repo'
 import { runMaintenance } from '../src/maintenance/maintenance'
 import { createTaskRow } from './helpers'
 
 /** A D1 binding that sums rows_written over everything executed through it. */
 function meteredDb(db: D1Database) {
-  const meter = { written: 0 }
+  const meter = { written: 0, read: 0 }
   const real = new WeakMap<object, D1PreparedStatement>()
   const count = (r: D1Result) => {
     meter.written += r.meta.rows_written
+    meter.read += r.meta.rows_read
     return r
   }
   const wrap = (stmt: D1PreparedStatement): D1PreparedStatement => {
@@ -155,5 +159,78 @@ describe('retention purge backlog', () => {
       .bind(task.id, other.id)
       .all<{ n: number }>()
     expect(results[0].n).toBe(0)
+  })
+})
+
+describe('D1 read amplification regressions', () => {
+  it('pages timestamp ties without sorting or scanning the whole timestamp group', async () => {
+    const task = await createTaskRow()
+    const insert = env.DB.prepare(`INSERT INTO runs(id,task_id,trigger,status,scheduled_at,created_at,updated_at)
+      VALUES(?,?,'manual','success',1000,1000,1000)`)
+    for (let i = 0; i < 1000; i += 100) {
+      await env.DB.batch(Array.from({ length: 100 }, (_, n) => insert.bind(`tie-${String(i + n).padStart(4, '0')}`, task.id)))
+    }
+    const { db, meter } = meteredDb(env.DB)
+    const first = await listRuns(db, task.id, { limit: 50 })
+    const second = await listRuns(db, task.id, { limit: 50, before: { createdAt: 1000, id: first[49].id } })
+    expect(new Set([...first, ...second].map((r) => r.id)).size).toBe(100)
+    expect(second[0].id).toBe('tie-0949')
+    expect(meter.read).toBeLessThanOrEqual(102)
+    const p = await plan('SELECT * FROM runs WHERE task_id=? AND (created_at,id)<(?,?) ORDER BY created_at DESC,id DESC LIMIT ?', task.id, 1000, first[49].id, 50)
+    expect(p).not.toMatch(/TEMP B-TREE/)
+  })
+
+  it('admission reads a fixed number of rows as task counters grow, writing only two counters', async () => {
+    const now = Date.UTC(2026, 9, 18)
+    const day = now / 86400000
+    const { db, meter } = meteredDb(env.DB)
+    const costs: number[] = []
+    for (const size of [10, 1000]) {
+      await env.DB.batch([env.DB.prepare('DELETE FROM execution_budget'), env.DB.prepare('DELETE FROM execution_budget_totals')])
+      const insert = env.DB.prepare("INSERT INTO execution_budget(day,kind,task_id,count) VALUES(?,'dispatch',?,1)")
+      for (let i = 0; i < size; i += 100) {
+        await env.DB.batch(Array.from({ length: Math.min(100, size - i) }, (_, n) => insert.bind(day, `budget-${i + n}`)))
+      }
+      await env.DB.prepare("INSERT INTO execution_budget_totals(day,kind,count) VALUES(?,'dispatch',?)").bind(day, size).run()
+      meter.read = meter.written = 0
+      await admit(db, 'new-task', 'dispatch', now)
+      costs.push(meter.read)
+      expect(meter.written).toBe(2)
+    }
+    expect(costs[1]).toBe(costs[0])
+    expect(costs[1]).toBeLessThanOrEqual(10)
+  })
+
+  it('expiry seeks only terminal actions and respects active leases and exhausted claims', async () => {
+    const task = await createTaskRow()
+    const msg = { runId: crypto.randomUUID(), taskId: task.id, trigger: 'manual' as const, scheduledAt: 1, attempt: 1 }
+    await claimRun(env.DB, msg, 1)
+    const insert = env.DB.prepare(`INSERT INTO run_actions(id,task_id,run_id,payload,due_at,expires_at,attempts,lease_until)
+      VALUES(?,?,?, ?,0,?,?,?)`)
+    for (let i = 0; i < 1000; i += 100) {
+      await env.DB.batch(Array.from({ length: 100 }, (_, n) => insert.bind(`future-${i + n}`, task.id, msg.runId, '{"kind":"retry"}', 999999, 0, 0)))
+    }
+    const { db, meter } = meteredDb(env.DB)
+    await expireActions(db, 100)
+    expect(meter.read).toBeLessThanOrEqual(2)
+    expect(meter.written).toBe(0)
+    expect(await plan("UPDATE run_actions SET failed_at=100 WHERE failed_at IS NULL AND terminal_at<=100"))
+      .toMatch(/SEARCH run_actions USING INDEX idx_run_actions_terminal/)
+    await env.DB.batch([
+      insert.bind('expired', task.id, msg.runId, '{"kind":"retry"}', 100, 0, 0),
+      insert.bind('leased', task.id, msg.runId, '{"kind":"retry"}', 100, 0, 200),
+      insert.bind('alert-cap', task.id, msg.runId, '{"kind":"alert"}', 999999, 3, 100),
+      insert.bind('retry-cap', task.id, msg.runId, '{"kind":"retry"}', 999999, 10, 100),
+      insert.bind('alert-last', task.id, msg.runId, '{"kind":"alert"}', 999999, 2, 0),
+    ])
+    await expireActions(db, 100)
+    const failed = await env.DB.prepare('SELECT id FROM run_actions WHERE failed_at IS NOT NULL ORDER BY id').all<{ id: string }>()
+    expect(failed.results.map((r) => r.id)).toEqual(['alert-cap', 'expired', 'retry-cap'])
+    // Claiming the last attempt must update the generated index; lease protects it until expiry.
+    expect(await claimAction(env.DB, 'alert-last', 100)).not.toBeNull()
+    await expireActions(db, 45099)
+    expect(await env.DB.prepare("SELECT failed_at FROM run_actions WHERE id='alert-last'").first('failed_at')).toBeNull()
+    await expireActions(db, 45100)
+    expect(await env.DB.prepare("SELECT failed_at FROM run_actions WHERE id='alert-last'").first('failed_at')).toBe(45100)
   })
 })

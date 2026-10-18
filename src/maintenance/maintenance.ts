@@ -48,7 +48,11 @@ export async function runMaintenance(env: CloudflareBindings, now = Date.now()):
   }
 
   await expireActions(env.DB, now)
-  await env.DB.prepare('DELETE FROM execution_budget WHERE day < ?').bind(Math.floor(now / DAY_MS) - 2).run()
+  const budgetCutoff = Math.floor(now / DAY_MS) - 2
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM execution_budget WHERE day < ?').bind(budgetCutoff),
+    env.DB.prepare('DELETE FROM execution_budget_totals WHERE day < ?').bind(budgetCutoff),
+  ])
   const lostRuns = await markLostRuns(env.DB, now)
 
   for (const action of await dueActions(env.DB, now)) {

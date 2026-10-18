@@ -117,6 +117,7 @@ it('a once-sync suspended in D1 cannot overwrite a newer independent sync RPC or
     await state.storage.deleteAlarm()
     const real = (instance as unknown as { env: CloudflareBindings }).env
     const DB = {
+      batch: real.DB.batch.bind(real.DB),
       prepare: (query: string) => !query.includes('SET enabled = 0') ? real.DB.prepare(query) : ({ bind: (...args: unknown[]) => ({ run: async () => {
         entered = true
         await gate

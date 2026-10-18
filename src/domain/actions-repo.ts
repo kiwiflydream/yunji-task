@@ -50,8 +50,8 @@ const ATTEMPT_LIMIT = `CASE WHEN json_extract(payload, '$.kind') = 'alert' THEN 
 /** Expired claims count even if the process never reached its catch/finally. */
 export async function expireActions(db: D1Database, now: number): Promise<void> {
   await db.prepare(`UPDATE run_actions SET failed_at = ?, last_error = 'recovery budget exhausted'
-    WHERE failed_at IS NULL AND lease_until <= ? AND (attempts >= ${ATTEMPT_LIMIT} OR expires_at <= ?)`)
-    .bind(now, now, now).run()
+    WHERE failed_at IS NULL AND terminal_at <= ?`)
+    .bind(now, now).run()
 }
 
 export async function cancelAction(db: D1Database, id: string, now: number, reason: string): Promise<void> {
@@ -59,8 +59,8 @@ export async function cancelAction(db: D1Database, id: string, now: number, reas
     .bind(now, reason, id).run()
 }
 
+/** Maintenance expires terminal actions before this read and the lost-run sweep. */
 export async function dueActions(db: D1Database, now: number, limit = 100): Promise<RunAction[]> {
-  await expireActions(db, now)
   const { results } = await db.prepare(
     `SELECT * FROM run_actions WHERE failed_at IS NULL AND due_at <= ? AND lease_until <= ? ORDER BY due_at LIMIT ?`,
   ).bind(now, now, limit).all<ActionRow>()
