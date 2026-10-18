@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "license": "MIT",
   "type": "module",
+  "packageManager": "pnpm@10.34.4",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
     "dev": "vite dev",
     "deploy": "vite build && pnpm db:migrate:remote && wrangler deploy",

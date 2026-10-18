@@ -28,6 +28,8 @@
 
 准备一个 Cloudflare 账号，以及 Node.js 22.x（22.12 及以上）或 24.x、pnpm 10。下载或克隆本项目后，在项目目录操作。
 
+部署构建使用 `pnpm@10.34.4`（见 `package.json`）。若 Cloudflare 构建日志仍选择 pnpm 9，在 Worker 的 **Builds 构建环境变量**中设置 `PNPM_VERSION=10.34.4` 后重试；它是构建工具配置，不是 Worker 运行时变量。
+
 ### 1. 安装依赖并登录
 
 ```sh
