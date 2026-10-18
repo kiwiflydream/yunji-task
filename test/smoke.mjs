@@ -83,7 +83,7 @@ try {
   }, 'Worker startup')
   const api = async (path, method = 'GET', body) => {
     const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
-    if (method === 'PUT' && (path.startsWith('/tasks/') || ['/settings/alert', '/settings/runtime'].includes(path))) {
+    if (method === 'PUT' && (path.startsWith('/tasks/') || ['/settings/alert', '/settings/runtime', '/settings/safety'].includes(path))) {
       const current = await fetch(`${base}/api${path}`, { headers })
       assert.ok(current.ok)
       headers['if-match'] = current.headers.get('etag')
@@ -152,6 +152,30 @@ try {
     assert.equal(saved.request().headers()['if-match'], `"${version + index}"`)
     await saved.finished()
   }
+  const taskLimit = page.getByRole('spinbutton', { name: 'Daily limit per task', exact: true })
+  const globalLimit = page.getByRole('spinbutton', { name: 'Daily limit across all tasks', exact: true })
+  assert.equal(await taskLimit.inputValue(), '10000')
+  assert.equal(await globalLimit.inputValue(), '100000')
+  for (const paused of [true, false]) {
+    await taskLimit.fill(paused ? '9000' : '10000')
+    await globalLimit.fill(paused ? '90000' : '100000')
+    await page.getByRole('radio', { name: paused ? /Emergency pause/ : /Running/ }).check()
+    const response = page.waitForResponse((res) => res.url().endsWith('/admin/api/settings/safety') && res.request().method() === 'PUT')
+    await page.getByRole('button', { name: 'Save execution safety settings', exact: true }).click()
+    const saved = await response
+    assert.equal(saved.status(), 200)
+    assert.equal(saved.request().headers()['if-match'], paused ? '"0"' : '"1"')
+    await saved.finished()
+    const state = await api('/settings/safety')
+    assert.deepEqual(state.settings, { paused, taskDailyLimit: paused ? 9000 : 10000, globalDailyLimit: paused ? 90000 : 100000 })
+  }
+  await page.reload()
+  await taskLimit.waitFor()
+  assert.equal(await taskLimit.inputValue(), '10000')
+  assert.equal(await globalLimit.inputValue(), '100000')
+  assert.equal(await page.getByRole('radio', { name: /Running/ }).isChecked(), true)
+  await taskLimit.scrollIntoViewIfNeeded()
+  console.log('PASS real safety settings UI: defaults, edit limits, pause/resume, versioned saves and reload')
   await page.screenshot({ path: join(tmpdir(), 'cf-task-full-stack-desktop.png') })
   assert.deepEqual(errors, [])
   console.log('PASS real admin UI: two consecutive saves, current If-Match, no page errors')

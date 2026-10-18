@@ -1,5 +1,21 @@
 // Chinese source messages are stable translation keys.
 export const en: Record<string, string> = {
+  "执行安全": "Execution safety",
+  "执行安全设置已保存": "Execution safety settings saved",
+  "限制每日调用次数；保存后生效，不会重置今天已使用的额度。": "Limit daily calls. Changes take effect when saved without resetting today’s usage.",
+  "单任务每日上限": "Daily limit per task",
+  "全系统每日上限": "Daily limit across all tasks",
+  "每个任务统一使用此上限，默认 10,000 次。": "The same limit applies to each task. Default: 10,000.",
+  "所有任务合计，默认 100,000 次。": "Combined across all tasks. Default: 100,000.",
+  "派发和实际执行分别计数、分别受以上额度限制；失败和重试也计入执行次数。每日 UTC 00:00（北京时间 08:00）换日。": "Dispatches and execution attempts are counted separately, each subject to these limits. Failed attempts and retries count too. The day resets at 00:00 UTC (08:00 Beijing time).",
+  "执行状态": "Execution status",
+  "正常运行": "Running",
+  "在每日额度内执行任务": "Run tasks within the daily limits",
+  "紧急暂停": "Emergency pause",
+  "停止新派发、尚未开始的执行和告警": "Stop new dispatches, pending executions and alerts",
+  "暂停不会撤销已经发出的调用。恢复后，定时调度由后续维护重新安排，暂停期间被终止的执行不会自动补跑。": "Pausing cannot undo calls already sent. After resuming, maintenance restores schedules. Executions terminated during the pause are not replayed automatically.",
+  "保存执行安全设置": "Save execution safety settings",
+
   "云吉 Sender": "Yunji Sender",
   '执行时间超出支持范围': 'The execution time is outside the supported range.',
   '执行时间无效或在所选时区不存在，请重新选择': 'The execution time is invalid or does not exist in the selected time zone. Choose another time.',

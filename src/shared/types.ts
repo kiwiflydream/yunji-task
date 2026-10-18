@@ -167,3 +167,15 @@ export interface TaskStats extends StatsBase {
 
 /** Marks task-originated HTTP requests so trigger endpoints can reject cycles. */
 export const RUN_HEADER = 'x-yunji-task-run'
+
+export interface SafetySettings {
+  paused: boolean
+  taskDailyLimit: number
+  globalDailyLimit: number
+}
+
+export const DEFAULT_SAFETY_SETTINGS: SafetySettings = {
+  paused: false,
+  taskDailyLimit: 10_000,
+  globalDailyLimit: 100_000,
+}

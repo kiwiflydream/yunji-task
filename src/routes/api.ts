@@ -1,5 +1,5 @@
 import { cachedStats } from '../domain/stats-cache'
-import { getSafetySettings, putSafetySettings, safetySettingsSchema, SafetyError, RUN_HEADER } from '../domain/safety'
+import { getSafetySettingsState, putSafetySettings, safetySettingsSchema, SafetyError, RUN_HEADER } from '../domain/safety'
 import { Hono } from 'hono'
 import { z } from 'zod'
 import { requireApiToken } from '../auth/api-token'
@@ -246,12 +246,18 @@ apiRoutes.put('/settings/alert', async (c) => {
 
 apiRoutes.get('/settings/safety', async (c) => {
   c.header('cache-control', 'no-store')
-  return c.json({ settings: await getSafetySettings(c.env.DB) })
+  const state = await getSafetySettingsState(c.env.DB)
+  c.header('etag', `"${state.version}"`)
+  return c.json(state)
 })
 apiRoutes.put('/settings/safety', async (c) => {
+  const expected = expectedVersion(c.req.raw)
   const parsed = safetySettingsSchema.safeParse(await jsonBody(c.req.raw))
   if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
-  return c.json({ settings: await putSafetySettings(c.env.DB, parsed.data) })
+  const saved = await putSafetySettings(c.env.DB, parsed.data, expected)
+  if (!saved) throw new ConflictError()
+  c.header('etag', `"${saved.version}"`)
+  return c.json(saved)
 })
 
 export const api = new Hono<{ Bindings: CloudflareBindings }>()

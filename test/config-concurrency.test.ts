@@ -78,11 +78,12 @@ describe('variable creation', () => {
   })
 })
 
-it.each(['task', 'runtime', 'alert'])('requires If-Match for %s updates without changing state', async (surface) => {
+it.each(['task', 'runtime', 'alert', 'safety'])('requires If-Match for %s updates without changing state', async (surface) => {
   const { task } = await (await call('/tasks', 'POST', input)).json() as { task: { id: string } }
   const path = surface === 'task' ? `/tasks/${task.id}` : `/settings/${surface}`
   const payload = surface === 'task' ? { ...input, name: 'must not replace' }
     : surface === 'runtime' ? { executionMode: 'direct', retentionDays: 5, statsRetentionDays: 10 }
+      : surface === 'safety' ? { paused: true, taskDailyLimit: 10000, globalDailyLimit: 100000 }
       : { mode: 'off', url: '', bodyTemplate: '', senderChannelGroup: '' }
   const before = await call(path)
   const original = await before.json()
@@ -90,4 +91,22 @@ it.each(['task', 'runtime', 'alert'])('requires If-Match for %s updates without 
   expect(await (await call(path)).json()).toEqual(original)
   const version = Number(before.headers.get('etag')!.replaceAll('"', ''))
   expect((await call(path, 'PUT', payload, version)).status).toBe(200)
+})
+
+
+it('does not let a stale safety form undo a pause or change reconciliation state', async () => {
+  await env.DB.prepare("DELETE FROM settings WHERE key='safety'").run()
+  const defaults = { paused: false, taskDailyLimit: 10000, globalDailyLimit: 100000 }
+  const first = await call('/settings/safety')
+  expect(first.headers.get('etag')).toBe('"0"')
+  expect(await first.json()).toEqual({ settings: defaults, version: 0 })
+  const competing = await Promise.all([1, 2].map(() => call('/settings/safety', 'PUT', { ...defaults, paused: true }, 0)))
+  expect(competing.map((r) => r.status).sort()).toEqual([200, 409])
+  await env.DB.prepare('UPDATE tasks SET scheduler_synced_version=version').run()
+  expect((await call('/settings/safety', 'PUT', defaults, 0)).status).toBe(409)
+  expect(await env.DB.prepare('SELECT COUNT(*) AS n FROM tasks WHERE scheduler_synced_version<version').first('n')).toBe(0)
+  expect(await (await call('/settings/safety')).json()).toEqual({ settings: { ...defaults, paused: true }, version: 1 })
+  const saved = await call('/settings/safety', 'PUT', defaults, 1)
+  expect(saved.status).toBe(200)
+  expect(saved.headers.get('etag')).toBe('"2"')
 })

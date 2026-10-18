@@ -1,3 +1,4 @@
+import { SafetySettingsForm } from '../components/SafetySettingsForm'
 import { localizeIssueMessage } from '../locale'
 import { tr, useLocale } from '../i18n'
 import { Button, Input, InputArea, LayerCard, Radio, Text, useKumoToastManager } from '@cloudflare/kumo'
@@ -14,6 +15,7 @@ import { FORM_CONFLICT_MESSAGE, useVersionedForm } from '../lib/versioned-form'
 export function SettingsPage() {
   useLocale()
 
+  const safety = useQuery({ queryKey: ['safety'], queryFn: api.safety, refetchOnMount: 'always', staleTime: 0 })
   const alert = useQuery({ queryKey: ['alert'], queryFn: api.alert, refetchOnMount: 'always', staleTime: 0 })
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, refetchOnMount: 'always', staleTime: 0 })
   return (
@@ -23,6 +25,10 @@ export function SettingsPage() {
         {me.isError && <ErrorBanner error={me.error} />}
         {!me.isFetchedAfterMount && !me.isError ? <PageLoader /> : me.data && (
           <RuntimeSettingsForm initial={me.data} />
+        )}
+        {safety.isError && <ErrorBanner error={safety.error} />}
+        {!safety.isFetchedAfterMount && !safety.isError ? <PageLoader /> : safety.data && (
+          <SafetySettingsForm initial={safety.data} />
         )}
         {alert.isError && <ErrorBanner error={alert.error} />}
         {!alert.isFetchedAfterMount && !alert.isError ? <PageLoader /> : alert.data && (

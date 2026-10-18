@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DEFAULT_SAFETY_SETTINGS, type SafetySettings } from '../shared/types'
 
 export const HANDOFF_MAX_ATTEMPTS = 10
 export const RECOVERY_MAX_AGE_MS = 24 * 60 * 60_000
@@ -11,21 +12,29 @@ export const safetySettingsSchema = z.object({
 export class SafetyError extends Error {
   constructor(message: string, readonly reason: 'paused' | 'budget' = 'budget') { super(message) }
 }
-const DEFAULT_SAFETY = { paused: false, taskDailyLimit: 100_000, globalDailyLimit: 1_000_000 }
-
-export async function getSafetySettings(db: D1Database) {
-  const row = await db.prepare("SELECT value FROM settings WHERE key = 'safety'").first<{ value: string }>()
-  return safetySettingsSchema.parse(row ? JSON.parse(row.value) : DEFAULT_SAFETY)
+export async function getSafetySettings(db: D1Database): Promise<SafetySettings> {
+  return (await getSafetySettingsState(db)).settings
 }
 
-export async function putSafetySettings(db: D1Database, raw: unknown) {
+export async function getSafetySettingsState(db: D1Database): Promise<{ settings: SafetySettings; version: number }> {
+  const row = await db.prepare("SELECT value, version FROM settings WHERE key = 'safety'").first<{ value: string; version: number }>()
+  return { settings: safetySettingsSchema.parse(row ? JSON.parse(row.value) : DEFAULT_SAFETY_SETTINGS), version: row?.version ?? 0 }
+}
+
+export async function putSafetySettings(db: D1Database, raw: unknown, expectedVersion: number) {
   const settings = safetySettingsSchema.parse(raw)
-  await db.batch([db.prepare("INSERT INTO settings(key,value,updated_at) VALUES('safety',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at")
-    .bind(JSON.stringify(settings), Date.now()),
-    // Reconcile paused schedulers on the next five-minute maintenance pass.
-    db.prepare('UPDATE tasks SET scheduler_synced_version=0 WHERE enabled=1 AND ?=0').bind(settings.paused ? 1 : 0),
+  const encoded = JSON.stringify(settings)
+  const now = Date.now()
+  const statement = expectedVersion === 0
+    ? db.prepare("INSERT INTO settings(key,value,updated_at) VALUES('safety',?,?) ON CONFLICT(key) DO NOTHING RETURNING version").bind(encoded, now)
+    : db.prepare("UPDATE settings SET value=?,updated_at=?,version=version+1 WHERE key='safety' AND version=? RETURNING version").bind(encoded, now, expectedVersion)
+  const [result] = await db.batch<{ version: number }>([
+    statement,
+    // A rejected stale write must not change scheduler reconciliation state.
+    db.prepare('UPDATE tasks SET scheduler_synced_version=0 WHERE changes()=1 AND enabled=1 AND ?=0').bind(settings.paused ? 1 : 0),
   ])
-  return settings
+  const row = result.results[0]
+  return row ? { settings, version: row.version } : null
 }
 
 /** Separate budgets bound both new dispatches and actual attempts (including retries).

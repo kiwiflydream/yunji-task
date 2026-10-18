@@ -7,7 +7,8 @@ import { getRun, type RunMessage } from '../src/domain/runs-repo'
 import { triggerTask } from '../src/domain/task-service'
 import { processRun, queueTransport } from '../src/executor/consumer'
 import { sendFailureAlert } from '../src/executor/alert'
-import { admit } from '../src/domain/safety'
+import { DEFAULT_SAFETY_SETTINGS } from '../src/shared/types'
+import { admit, getSafetySettingsState, putSafetySettings } from '../src/domain/safety'
 import { runMaintenance } from '../src/maintenance/maintenance'
 import { deliverAction } from '../src/executor/actions'
 import { createTaskRow, toSnapshot } from './helpers'
@@ -17,7 +18,8 @@ beforeEach(async () => {
 })
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
-const safety = (value: object) => env.DB.prepare("INSERT INTO settings(key,value,updated_at) VALUES('safety',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({ paused: false, taskDailyLimit: 100000, globalDailyLimit: 1000000, ...value }), Date.now()).run()
+const safety = (value: object) => env.DB.prepare("INSERT INTO settings(key,value,updated_at) VALUES('safety',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(JSON.stringify({ ...DEFAULT_SAFETY_SETTINGS, ...value }), Date.now()).run()
+const safetyHeaders = async () => ({ authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json', 'if-match': `"${(await getSafetySettingsState(env.DB)).version}"` })
 const message = (taskId: string): RunMessage => ({ taskId, runId: crypto.randomUUID(), trigger: 'manual', scheduledAt: Date.now(), attempt: 1 })
 
 it('stops queue handoffs after a finite number of failures, releasing the slot', async () => {
@@ -137,13 +139,13 @@ it('rejects expired queue handoffs before sending and leaves a terminal run', as
 })
 
 it('exposes the authenticated emergency pause without changing runtime settings', async () => {
-  const headers = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
+  const headers = await safetyHeaders()
   const denied = await app.request('/api/settings/safety', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ paused: true }) }, env)
   expect(denied.status).toBe(401)
   const changed = await app.request('/api/settings/safety', { method: 'PUT', headers, body: JSON.stringify({ paused: true, taskDailyLimit: 12, globalDailyLimit: 30 }) }, env)
   expect(changed.status).toBe(200)
   const read = await app.request('/api/settings/safety', { headers }, env)
-  expect(await read.json()).toEqual({ settings: { paused: true, taskDailyLimit: 12, globalDailyLimit: 30 } })
+  expect(await read.json()).toEqual({ settings: { paused: true, taskDailyLimit: 12, globalDailyLimit: 30 }, version: 1 })
   const task = await createTaskRow()
   const trigger = await app.request(`/api/tasks/${task.id}/trigger`, { method: 'POST', headers }, env)
   expect(trigger.status).toBe(429)
@@ -183,7 +185,7 @@ it('maintenance expires abandoned actions and closes their protected runs', asyn
 
 it('rejects partial safety writes instead of accidentally unpausing', async () => {
   await safety({ paused: true, globalDailyLimit: 5 })
-  const headers = { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }
+  const headers = await safetyHeaders()
   const res = await app.request('/api/settings/safety', { method: 'PUT', headers, body: JSON.stringify({ taskDailyLimit: 10 }) }, env)
   expect(res.status).toBe(422)
   const read = await app.request('/api/settings/safety', { headers }, env)
@@ -210,7 +212,7 @@ it('maintenance resumes paused cron tasks after the safety switch is released', 
   await safety({ paused: true })
   await runDurableObjectAlarm(stub)
   expect((await stub.status()).alarmAt).toBeNull()
-  const res = await app.request('/api/settings/safety', { method: 'PUT', headers: { authorization: `Bearer ${env.API_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ paused: false, taskDailyLimit: 100000, globalDailyLimit: 1000000 }) }, env)
+  const res = await app.request('/api/settings/safety', { method: 'PUT', headers: await safetyHeaders(), body: JSON.stringify(DEFAULT_SAFETY_SETTINGS) }, env)
   expect(res.status).toBe(200)
   await runMaintenance(env)
   expect((await stub.status()).alarmAt).not.toBeNull()
@@ -357,4 +359,16 @@ it('maintenance removes old task and global counters together without resetting 
   const totals = await env.DB.prepare('SELECT day,count FROM execution_budget_totals ORDER BY day').all()
   expect(tasks.results).toEqual([{ day: day - 2, count: 1 }, { day, count: 1 }])
   expect(totals.results).toEqual(tasks.results)
+})
+
+
+it('saving lower safety limits preserves consumed quota and blocks further attempts', async () => {
+  const now = Date.now()
+  await admit(env.DB, 'quota-task', 'attempt', now)
+  await admit(env.DB, 'quota-task', 'attempt', now)
+  const saved = await putSafetySettings(env.DB, { paused: false, taskDailyLimit: 1, globalDailyLimit: 100000 }, 0)
+  expect(saved).toMatchObject({ settings: { taskDailyLimit: 1 }, version: 1 })
+  await expect(admit(env.DB, 'quota-task', 'attempt', now)).rejects.toThrow('budget exhausted')
+  expect(await env.DB.prepare("SELECT count FROM execution_budget WHERE task_id='quota-task' AND kind='attempt'").first('count')).toBe(2)
+  expect(await env.DB.prepare("SELECT count FROM execution_budget_totals WHERE kind='attempt'").first('count')).toBe(2)
 })

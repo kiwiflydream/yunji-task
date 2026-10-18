@@ -6,6 +6,7 @@ import type {
   Issue,
   Run,
   RuntimeSettings,
+  SafetySettings,
   SchedulerStatus,
   StatsOverview,
   StatsRange,
@@ -16,6 +17,7 @@ import { viewerTimezone } from './lib/format'
 
 export type TaskView = Task & { nextRunAt: number | null }
 export type TaskSummaryView = TaskSummary & { nextRunAt: number | null }
+export type SafetySettingsState = { settings: SafetySettings; version: number }
 export type VersionedAlertSettings = AlertSettings & { version: number }
 
 export class ApiError extends Error {
@@ -84,6 +86,9 @@ export const api = {
   alert: () => request<{ alert: AlertSettings; version: number }>('/settings/alert').then((r) => ({ ...r.alert, version: r.version })),
   putAlert: (alert: AlertSettings, version: number) =>
     request<{ alert: AlertSettings; version: number }>('/settings/alert', versionedPut(alert, version)).then((r) => ({ ...r.alert, version: r.version })),
+  safety: () => request<SafetySettingsState>('/settings/safety'),
+  putSafety: (settings: SafetySettings, version: number) =>
+    request<SafetySettingsState>('/settings/safety', versionedPut(settings, version)),
   putRuntimeSettings: (settings: RuntimeSettings, version: number) =>
     request<{ settings: RuntimeSettings; version: number }>('/settings/runtime', versionedPut(settings, version)),
 }
