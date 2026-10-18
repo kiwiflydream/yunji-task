@@ -66,15 +66,15 @@ const TASK_EXISTS = 'WHERE EXISTS (SELECT 1 FROM tasks WHERE id = ?)'
 
 export async function insertSkippedRun(
   db: D1Database,
-  run: { taskId: string; scheduledAt: number; reason: string },
+  run: { runId?: string; taskId: string; scheduledAt: number; reason: string },
   now: number,
 ): Promise<void> {
-  const runId = crypto.randomUUID()
+  const runId = run.runId ?? crypto.randomUUID()
   await db.batch([
     db
       .prepare(
         `INSERT INTO runs (id, task_id, trigger, status, attempt, scheduled_at, finished_at, error, created_at, updated_at)
-         SELECT ?, ?, 'schedule', 'skipped', 0, ?, ?, ?, ?, ? ${TASK_EXISTS}`,
+         SELECT ?, ?, 'schedule', 'skipped', 0, ?, ?, ?, ?, ? ${TASK_EXISTS} ON CONFLICT (id) DO NOTHING`,
       )
       .bind(runId, run.taskId, run.scheduledAt, now, run.reason, now, now, run.taskId),
     skippedStatement(db, runId),
@@ -181,13 +181,23 @@ export async function listRuns(
  * partial index instead of scanning every run.
  */
 export const LOST_WHERE = `status IN ('running', 'retrying') AND updated_at < ? AND (status = 'running' OR updated_at < ?)
-  AND NOT EXISTS (SELECT 1 FROM run_actions WHERE run_id = runs.id AND failed_at IS NULL)`
+  AND NOT EXISTS (SELECT 1 FROM run_actions WHERE run_id = runs.id AND failed_at IS NULL
+    AND json_extract(payload, '$.kind') != 'release')`
 
 /** Runs whose consumer died mid-flight never report back; close them out (counted as failed). */
 export async function markLostRuns(db: D1Database, now: number): Promise<number> {
   const params = [now - RUNNING_STALE_MS, now - RETRYING_STALE_MS]
-  const [, res] = await db.batch([
+  const [, , res] = await db.batch([
     lostRunsStatement(db, LOST_WHERE, params),
+    // Insert before closing, atomically with the lost result. Release actions
+    // don't suppress LOST_WHERE; retry/alert actions still protect live work.
+    db.prepare(
+      `INSERT INTO run_actions (id, task_id, run_id, payload, due_at)
+       SELECT id || ':release', task_id, id,
+         json_object('kind', 'release', 'run', json_object('id', id, 'attempt', attempt)), ?
+       FROM runs WHERE trigger = 'schedule' AND ${LOST_WHERE}
+       ON CONFLICT (id) DO NOTHING`,
+    ).bind(now, ...params),
     db
       .prepare(
         `UPDATE runs SET status = 'failed', finished_at = ?, updated_at = ?,

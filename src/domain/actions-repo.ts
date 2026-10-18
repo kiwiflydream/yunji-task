@@ -5,6 +5,7 @@ import type { ExecutionMode } from '../shared/types'
 export type ActionPayload =
   | { kind: 'retry'; msg: RunMessage; mode: ExecutionMode; runAt: number }
   | { kind: 'alert'; task: AlertTask; run: FailedRun }
+  | { kind: 'release'; run: { id: string; attempt: number } }
 
 export interface RunAction {
   id: string

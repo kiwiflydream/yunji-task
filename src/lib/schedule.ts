@@ -1,5 +1,8 @@
 import { Cron } from 'croner'
 
+/** workerd converts alarm dates to signed 64-bit nanoseconds. */
+export const MAX_ALARM_TIME_MS = 9_223_372_036_854
+
 export type ScheduleType = 'cron' | 'once' | 'manual'
 
 export interface ScheduleSpec {

@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { executorSpecSchema, type ExecutorSpec } from '../executor/registry'
-import { validateCron, type ScheduleSpec, type ScheduleType } from '../lib/schedule'
+import { MAX_ALARM_TIME_MS, validateCron, type ScheduleSpec, type ScheduleType } from '../lib/schedule'
 import { DEFAULT_TIMEZONE, isValidTimezone } from '../lib/time'
 import type { TaskExecutionMode } from '../shared/types'
 
@@ -18,7 +18,7 @@ const timezoneSchema = z
 const runAtSchema = z.union([
   z.number().int().positive(),
   z.iso.datetime({ offset: true }).transform((s) => Date.parse(s)),
-])
+]).pipe(z.number().int().positive().max(MAX_ALARM_TIME_MS, '执行时间超出支持范围'))
 
 export const scheduleSchema = z
   .discriminatedUnion('type', [

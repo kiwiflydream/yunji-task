@@ -8,7 +8,7 @@ import type { RunStatus } from '../../../src/shared/types'
 export const viewerTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone
 
 export function fmtTime(ms: number | null | undefined, tz = viewerTimezone) {
-  if (ms == null) return '—'
+  if (ms == null || !Number.isFinite(new Date(ms).getTime())) return '—'
   return getLocale() === 'zh-CN' ? formatInZone(ms, tz) : new Intl.DateTimeFormat('en-GB', {
     timeZone: tz, year: 'numeric', month: 'short', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',

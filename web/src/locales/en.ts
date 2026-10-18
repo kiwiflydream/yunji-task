@@ -1,5 +1,6 @@
 // Chinese source messages are stable translation keys.
 export const en: Record<string, string> = {
+  '执行时间超出支持范围': 'The execution time is outside the supported range.',
   '执行时间无效或在所选时区不存在，请重新选择': 'The execution time is invalid or does not exist in the selected time zone. Choose another time.',
   '按下方时区解释；夏令时重复时间新输入取较早时刻，未修改的已保存时间保持原时刻。': 'Uses the time zone below. For repeated daylight-saving times, new entries use the earlier occurrence; unchanged saved times keep their original instant.',
   '配置已被其他操作更新，请重新加载后再保存。': 'This configuration was updated elsewhere. Reload before saving again.',

@@ -78,6 +78,7 @@ export const emptyTaskForm: TaskFormState = {
 export function taskToForm(task: Task): TaskFormState {
   const s = task.schedule
   const cfg = task.executor.config
+  const runAt = s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : ''
   return {
     name: task.name,
     description: task.description,
@@ -85,9 +86,9 @@ export function taskToForm(task: Task): TaskFormState {
     scheduleType: s.type,
     cron: s.type === 'cron' ? s.cron : emptyTaskForm.cron,
     timezone: s.timezone,
-    runAt: s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : '',
-    originalRunAt: s.type === 'once' ? s.runAt : null,
-    originalRunAtLocal: s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : '',
+    runAt,
+    originalRunAt: s.type === 'once' && runAt !== '' ? s.runAt : null,
+    originalRunAtLocal: runAt,
     originalTimezone: s.timezone,
     method: cfg.method,
     url: cfg.url,

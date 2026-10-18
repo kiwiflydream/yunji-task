@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { ScheduleSnapshot } from '../domain/task'
 import { disableFiredOnceTask } from '../domain/tasks-repo'
-import { insertSkippedRun, type RunMessage } from '../domain/runs-repo'
+import { getRun, insertSkippedRun, type RunMessage } from '../domain/runs-repo'
 import { processRun, type RunTransport } from '../executor/consumer'
 import { effectiveMode, runQueue } from '../executor/mode'
 import { MAX_DELIVERIES, REDELIVERY_DELAY_MS } from '../executor/run-executor'
@@ -20,6 +20,14 @@ const K_ONCE_FIRED = 'onceFiredVersion'
 const PENDING_PREFIX = 'pending:'
 const ACTION_PREFIX = 'action:'
 interface PendingAction { id: string; dueAt: number }
+const ONCE_PREFIX = 'once:'
+interface PendingOnce {
+  snapshot: ScheduleSnapshot
+  runId: string
+  scheduledAt: number
+  dueAt: number
+  mode?: ExecutionMode
+}
 
 /** Modes in which the DO hands out runs itself (rather than the queue). */
 export type LocalMode = Exclude<ExecutionMode, 'queue'>
@@ -63,7 +71,7 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       const [alarm, next] = await Promise.all([txn.getAlarm(), txn.get<number>(K_NEXT)])
       const armed = alarm !== null && next !== undefined
       const wantArmed = snapshot.enabled && snapshot.scheduleType !== 'manual' && !firedThisVersion
-      const strandedPending = alarm === null && ((await this.pendingRuns(txn)).length > 0 || (await this.pendingActions(txn)).length > 0)
+      const strandedPending = alarm === null && ((await this.pendingRuns(txn)).length > 0 || (await this.pendingActions(txn)).length > 0 || (await this.pendingOnce(txn)).length > 0)
       if (current && current.version === snapshot.version && armed === wantArmed && !strandedPending) return
 
       await txn.put(K_SNAPSHOT, snapshot)
@@ -85,18 +93,20 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
   private async handleAlarm(): Promise<void> {
     const storage = this.ctx.storage
     const now = Date.now()
-    const [snapshot, next, pending, actions] = await Promise.all([
+    const [snapshot, next, pending, actions, onceRuns] = await Promise.all([
       storage.get<ScheduleSnapshot>(K_SNAPSHOT),
       storage.get<number>(K_NEXT),
       this.pendingRuns(),
       this.pendingActions(),
+      this.pendingOnce(),
     ])
     // The alarm was set for the earliest of these events and fires at or after
     // it; everything due by then is due now.
-    const target = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt))
+    const target = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt), ...onceRuns.map((p) => p.dueAt))
     const horizon = Number.isFinite(target) ? Math.max(now, target) : now
     const duePending = pending.filter((p) => p.dueAt <= horizon)
     const dueActions = actions.filter((a) => a.dueAt <= horizon)
+    const dueOnce = onceRuns.filter((p) => p.dueAt <= horizon)
     const nextDue = next !== undefined && next <= horizon
     const active = !!snapshot && snapshot.enabled && snapshot.scheduleType !== 'manual'
     const once = snapshot?.scheduleType === 'once'
@@ -110,8 +120,17 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     if (dueActions.length) await storage.delete(dueActions.map((a) => ACTION_PREFIX + a.id))
     if (nextDue) {
       // Missed fires are not caught up: the next fire is computed from now.
-      await this.setNext(active && !once ? nextFireTime(snapshot, Math.max(now, next)) : null)
-      if (fire && once) await storage.put(K_ONCE_FIRED, snapshot.version)
+      const onceRun: PendingOnce | undefined = fire && once
+        ? { snapshot, runId: crypto.randomUUID(), scheduledAt: next, dueAt: now }
+        : undefined
+      await storage.transaction(async (txn) => {
+        await this.setNext(active && !once ? nextFireTime(snapshot, Math.max(now, next)) : null, txn)
+        if (onceRun) {
+          await txn.put(ONCE_PREFIX + onceRun.runId, onceRun)
+          await txn.put(K_ONCE_FIRED, onceRun.snapshot.version)
+        }
+      })
+      if (onceRun) dueOnce.push(onceRun)
     }
     await this.rearm()
 
@@ -120,8 +139,9 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       else this.start(p)
     }
     for (const a of dueActions) this.ctx.waitUntil(this.handOffAction(a))
+    for (const p of dueOnce) await this.dispatchOnce(p)
     if (fire) {
-      await this.dispatch(snapshot, next, now)
+      if (!once) await this.dispatch(snapshot, next, now)
       if (once) await this.disableFiredOnce(snapshot)
     }
   }
@@ -188,8 +208,8 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
 
   /** Point the alarm at the earliest of the next fire and any pending attempt. */
   private async rearm(storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<void> {
-    const [next, pending, actions] = await Promise.all([storage.get<number>(K_NEXT), this.pendingRuns(storage), this.pendingActions(storage)])
-    const at = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt))
+    const [next, pending, actions, onceRuns] = await Promise.all([storage.get<number>(K_NEXT), this.pendingRuns(storage), this.pendingActions(storage), this.pendingOnce(storage)])
+    const at = Math.min(next ?? Infinity, ...pending.map((p) => p.dueAt), ...actions.map((a) => a.dueAt), ...onceRuns.map((p) => p.dueAt))
     if (Number.isFinite(at)) await storage.setAlarm(at)
     else await storage.deleteAlarm()
   }
@@ -202,8 +222,39 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
     return [...(await storage.list<PendingAction>({ prefix: ACTION_PREFIX })).values()]
   }
 
+  private async pendingOnce(storage: DurableObjectStorage | DurableObjectTransaction = this.ctx.storage): Promise<PendingOnce[]> {
+    return [...(await storage.list<PendingOnce>({ prefix: ONCE_PREFIX })).values()]
+  }
+
+  /** Consume a once trigger only after its recoverable dispatch intent is stored. */
+  private async dispatchOnce(p: PendingOnce): Promise<void> {
+    const key = ONCE_PREFIX + p.runId
+    try {
+      const run = await getRun(this.env.DB, p.runId)
+      let accepted = run !== null
+      if (!accepted) {
+        p.mode ??= await effectiveMode(this.env, p.snapshot)
+        // Freeze the resolved transport before attempting its handoff.
+        await this.ctx.storage.put(key, p)
+        accepted = await this.dispatch(p.snapshot, p.scheduledAt, Date.now(), p.runId, p.mode)
+      }
+      if (accepted) {
+        // A crash after handoff but before deleting the intent must not take
+        // the skip slot again. In-flight runs already have their own recovery.
+        if (run && run.status !== 'running' && run.status !== 'retrying') await this.complete(p.runId)
+        await this.ctx.storage.delete(key)
+        await this.rearm()
+        return
+      }
+    } catch (err) {
+      console.error('once dispatch failed; retained for recovery', p.runId, err)
+    }
+    await this.ctx.storage.put(key, { ...p, dueAt: Date.now() + REDELIVERY_DELAY_MS })
+    await this.rearm()
+  }
+
   /** Never throws (see alarm()). */
-  private async dispatch(snapshot: ScheduleSnapshot, scheduledAt: number, now: number): Promise<void> {
+  private async dispatch(snapshot: ScheduleSnapshot, scheduledAt: number, now: number, runId = crypto.randomUUID(), resolvedMode?: ExecutionMode): Promise<boolean> {
     const storage = this.ctx.storage
     try {
       const skip = snapshot.overlapPolicy === 'skip'
@@ -212,18 +263,18 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
         const waiting = running && running.leaseUntil <= now
           ? await storage.get<PendingRun>(PENDING_PREFIX + running.runId)
           : undefined
-        if (running && (running.leaseUntil > now || waiting?.mode === 'queue')) {
+        if (running && running.runId !== runId && (running.leaseUntil > now || waiting?.mode === 'queue')) {
           await insertSkippedRun(
             this.env.DB,
-            { taskId: snapshot.taskId, scheduledAt, reason: `previous run ${running.runId} still in progress` },
+            { runId, taskId: snapshot.taskId, scheduledAt, reason: `previous run ${running.runId} still in progress` },
             now,
           )
-          return
+          return true
         }
       }
-      const mode = await effectiveMode(this.env, snapshot)
+      const mode = resolvedMode ?? await effectiveMode(this.env, snapshot)
       const msg: RunMessage = {
-        runId: crypto.randomUUID(),
+        runId,
         taskId: snapshot.taskId,
         trigger: 'schedule',
         scheduledAt,
@@ -233,11 +284,13 @@ export class TaskScheduler extends DurableObject<CloudflareBindings> {
       if (skip) await storage.put(K_RUNNING, { runId: msg.runId, leaseUntil: now + snapshot.leaseMs })
       if (mode !== 'queue') {
         this.start({ msg, dueAt: now, deliveries: 0, mode })
-        return
+        return true
       }
       await this.sendToQueue({ msg, dueAt: now, deliveries: 0, mode, leaseMs: snapshot.leaseMs })
+      return true
     } catch (err) {
       console.error('dispatch failed', snapshot.taskId, err)
+      return false
     }
   }
 

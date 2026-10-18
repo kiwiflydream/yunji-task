@@ -144,5 +144,6 @@ export function formatInZone(epochMs: number, tz: string): string {
 
 /** Format epoch ms as a `datetime-local` input value in `tz`. */
 export function toDatetimeLocal(epochMs: number, tz: string): string {
+  if (!Number.isFinite(new Date(epochMs).getTime())) return ''
   return formatInZone(epochMs, tz).replace(' ', 'T')
 }

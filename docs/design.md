@@ -47,9 +47,10 @@
 - Queue 至少投递一次。每次执行有 `runId`：首次 `INSERT ... ON CONFLICT DO NOTHING` 抢占，重试用 `UPDATE ... WHERE status='retrying' AND attempt=n-1` 抢占。重复消息不调用任务接口，但会恢复该 run 尚未完成的投递动作。
 - `run_actions` 与执行结果在同一个 D1 batch 中写入，保存重试的原方式、消息及到期时间，或失败告警的配置快照。动作以 45 秒租约抢占，成功后删除；重试投递失败继续保留，告警耗尽后保留失败原因。DO 用 `action:<id>` 共用 alarm，再交给独立 `ActionExecutor`；维护任务每 5 分钟恢复待投递及过期租约。发送成功但确认前中断可能重复投递；任务接口有 attempt 抢占，告警接收方应按 `run.id` 去重。
 - 消费者抢占后崩溃会留下 `running` / `retrying` 状态的 run，对账任务会把超时（running 15 分钟、retrying 75 分钟）且没有待投递动作的 run 标记为 `failed`（lost）。宁可丢一次执行，也不重复调用下游。待投递动作存在时不做 lost 或日志到期清理；删除 run 时级联删除动作。
-- DO alarm 处理函数不抛异常（避免 alarm 自动重试导致重复投递）；投递失败只记日志，由下一次触发继续。
+- DO alarm 处理函数不抛异常（避免 alarm 自动重试导致重复投递）。一次性触发的待投递记录与 `onceFiredVersion` 在同一 DO 存储事务中保存；读取全局方式失败后按 30 秒间隔恢复，使用同一执行 ID，确定方式后固定该方式。周期任务仍不补跑错过的触发。
 - 抢占是幂等的，所以 Queue 重投一个已经抢占过的 run 不会再执行一次。Queue 的自动重投只在抢占之前出错（例如 D1 暂时不可用）时有用；direct 模式用 30 秒后重新投递来模拟（最多 3 次）。
 - once 任务触发后，DO 记录 `onceFiredVersion` 并尝试把 D1 中的任务停用（version + 1）；如果这一步失败，对账时会补做。
+- 对账将失联的定时执行标为失败时，在同一 D1 batch 中创建 `release` 动作，由现有动作投递流程调用 DO `complete(runId)`。失败后持续恢复，且旧执行的释放不会清除较新的槽位；释放完成前保留执行日志。
 
 ## 执行方式
 

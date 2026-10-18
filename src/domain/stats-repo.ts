@@ -51,11 +51,11 @@ export function finalOutcomeStatement(
     .bind(outcome === 'success' ? 1 : 0, outcome === 'failed' ? 1 : 0, durationMs, durationMs, ...buckets, runId)
 }
 
-/** Batch after inserting this skipped run; a deleted task produces no run and no stats. */
+/** Batch immediately after INSERT; deleted tasks and duplicate IDs contribute no stats. */
 export function skippedStatement(db: D1Database, runId: string): D1PreparedStatement {
   return db
     .prepare(`INSERT INTO run_stats (task_id, bucket, skipped)
-      SELECT task_id, ${BUCKET_OF_SCHEDULED}, 1 FROM runs WHERE id = ? AND status = 'skipped' ${ON_CONFLICT}`)
+      SELECT task_id, ${BUCKET_OF_SCHEDULED}, 1 FROM runs WHERE id = ? AND status = 'skipped' AND changes() > 0 ${ON_CONFLICT}`)
     .bind(runId)
 }
 

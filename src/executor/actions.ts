@@ -18,6 +18,8 @@ export async function deliverAction(id: string, env: CloudflareBindings, transpo
     const payload = action.payload
     if (payload.kind === 'alert') {
       await sendFailureAlert(env, payload.task, payload.run)
+    } else if (payload.kind === 'release') {
+      await env.TASK_SCHEDULER.getByName(action.taskId).complete(payload.run.id)
     } else {
       const delaySeconds = Math.max(0, Math.ceil((payload.runAt - Date.now()) / 1000))
       if (transport?.mode === payload.mode) await transport.retry(payload.msg, delaySeconds)
