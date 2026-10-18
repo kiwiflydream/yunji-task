@@ -217,8 +217,8 @@ describe('variables API', () => {
 
 describe('settings API', () => {
   it('reads and writes the global alert target', async () => {
-    const initial = await (await call('/settings/alert')).json() as { alert: { mode: string; url: string; bodyTemplate: string; senderTopic: string } }
-    expect(initial.alert).toMatchObject({ mode: 'webhook', url: '', senderTopic: '' })
+    const initial = await (await call('/settings/alert')).json() as { alert: { mode: string; url: string; bodyTemplate: string; senderChannelGroup: string } }
+    expect(initial.alert).toMatchObject({ mode: 'webhook', url: '', senderChannelGroup: '' })
     expect(JSON.parse(initial.alert.bodyTemplate)).toMatchObject({ title: '云吉 Task: {{task.name}}', group: 'yunji-task' })
     const res = await call('/settings/alert', {
       method: 'PUT',
@@ -226,7 +226,7 @@ describe('settings API', () => {
     })
     expect(res.status).toBe(200)
     expect(await (await call('/settings/alert')).json()).toEqual({
-      alert: { mode: 'webhook', url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderTopic: '' },
+      alert: { mode: 'webhook', url: 'https://alerts.test/x', bodyTemplate: '{"t":"{{task.name}}"}', senderChannelGroup: '' },
       version: 1,
     })
   })

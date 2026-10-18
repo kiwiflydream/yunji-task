@@ -106,7 +106,7 @@ function ScheduleCard({ task }: { task: TaskView }) {
       : task.alert.mode === 'off'
         ? tr("关闭")
         : task.alert.mode === 'sender'
-          ? tr("cf-sender 主题 {0}", task.alert.topic)
+          ? tr("云吉 Sender 渠道组 {0}", task.alert.channelGroup)
           : task.alert.url,
   ])
   const st = scheduler.data

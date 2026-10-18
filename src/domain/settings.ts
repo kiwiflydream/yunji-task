@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { BARK_ALERT_TEMPLATE, DEFAULT_RUNTIME_SETTINGS, type RuntimeSettings } from '../shared/types'
-import { SENDER_TOPIC_RE } from './task'
+import { SENDER_CHANNEL_GROUP_RE } from './task'
 
 export const runtimeSettingsSchema = z.object({
   executionMode: z.enum(['worker', 'queue', 'direct']),
@@ -37,16 +37,21 @@ export async function putRuntimeSettings(db: D1Database, settings: RuntimeSettin
   return writeSetting(db, 'runtime', settings, now, expectedVersion)
 }
 
-export const alertSettingsSchema = z.object({
+export const alertSettingsSchema = z.preprocess((value) => {
+  if (value && typeof value === 'object' && 'senderTopic' in value && !('senderChannelGroup' in value)) {
+    return { ...value, senderChannelGroup: value.senderTopic }
+  }
+  return value
+}, z.object({
   mode: z.enum(['webhook', 'sender', 'off']).default('webhook'),
   url: z.string().trim().max(2048).default(''),
   bodyTemplate: z.string().max(8000).default(BARK_ALERT_TEMPLATE),
-  senderTopic: z.string().trim().default(''),
+  senderChannelGroup: z.string().trim().default(''),
 }).superRefine((settings, ctx) => {
-  if (settings.mode === 'sender' && !SENDER_TOPIC_RE.test(settings.senderTopic)) {
-    ctx.addIssue({ code: 'custom', path: ['senderTopic'], message: '请填写主题标识，只能包含小写字母、数字、点、下划线和连字符，最长 64 个字符' })
+  if (settings.mode === 'sender' && !SENDER_CHANNEL_GROUP_RE.test(settings.senderChannelGroup)) {
+    ctx.addIssue({ code: 'custom', path: ['senderChannelGroup'], message: '请填写渠道组标识，只能包含小写字母、数字、点、下划线和连字符，最长 64 个字符' })
   }
-})
+}))
 
 export type AlertSettings = z.output<typeof alertSettingsSchema>
 

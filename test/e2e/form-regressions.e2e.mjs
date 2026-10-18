@@ -24,7 +24,7 @@ async function fixture(page, testInfo) {
   }
   const state = {
     task, runtime: { executionMode: 'worker', retentionDays: 30, statsRetentionDays: 90 }, runtimeVersion: 1,
-    alert: { mode: 'webhook', url: 'https://example.com/original', bodyTemplate: '', senderTopic: '' }, alertVersion: 1,
+    alert: { mode: 'webhook', url: 'https://example.com/original', bodyTemplate: '', senderChannelGroup: '' }, alertVersion: 1,
     reads: { task: 0, runtime: 0, alert: 0 }, writes: [], fail: null, delay: null,
     variables: { SECRET: { value: 'keep-this-secret', description: 'Existing variable' } },
   }
@@ -114,6 +114,29 @@ test.beforeEach(({ page }) => {
   browserErrors.set(page, errors)
 })
 test.afterEach(({ page }) => expect(browserErrors.get(page)).toEqual([]))
+
+for (const surface of ['task', 'alert']) {
+  test(`${surface}: Yunji Sender uses channel groups in the editor and save payload`, async ({ page }, testInfo) => {
+    const { state, text, zh } = await fixture(page, testInfo)
+    await open(page, state, surface)
+    await inputFor(page, text, surface).waitFor()
+    const sender = surface === 'task'
+      ? (zh ? '云吉 Sender 渠道组' : 'Yunji Sender channel group')
+      : (zh ? '云吉 Sender' : 'Yunji Sender')
+    await page.getByRole('radio', { name: new RegExp(sender) }).check()
+    const group = page.getByRole('textbox', { name: zh ? '渠道组标识' : 'Channel group ID', exact: true })
+    await expect(group).toBeVisible()
+    await group.fill('ops-alert')
+    await controls(page, text, surface).save.click()
+    await expect.poll(() => state.writes.length).toBe(1)
+    const payload = surface === 'task' ? state.writes[0].body.alert : state.writes[0].body
+    expect(payload).toMatchObject(surface === 'task'
+      ? { mode: 'sender', channelGroup: 'ops-alert' }
+      : { mode: 'sender', senderChannelGroup: 'ops-alert' })
+    expect(payload).not.toHaveProperty(surface === 'task' ? 'topic' : 'senderTopic')
+    await page.screenshot({ path: testInfo.outputPath('sender-channel-group.png') })
+  })
+}
 
 for (const surface of ['task', 'runtime', 'alert']) {
   test(`${surface}: entering an editor waits for a fresh snapshot instead of freezing cached values`, async ({ page }, testInfo) => {

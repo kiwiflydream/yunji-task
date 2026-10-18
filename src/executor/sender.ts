@@ -1,11 +1,11 @@
 /**
- * The subset of cf-sender's `SenderRpc` entrypoint yunji-task uses. Declared
+ * The subset of Yunji Sender's `SenderRpc` entrypoint yunji-task uses. Declared
  * here rather than imported so the two Workers stay independently buildable.
  */
 export interface SenderService {
   send(
     input: {
-      topic: string
+      channelGroup: string
       title: string
       body: string
       format: 'text' | 'markdown'

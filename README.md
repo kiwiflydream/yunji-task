@@ -166,7 +166,9 @@ pnpm deploy                             # 构建、执行 D1 迁移并发布 Wor
 
 最终失败告警也先持久化，再由独立 Worker 发送，不占用任务请求的 25 秒上限所在的后台执行窗口。告警目标和模板取失败时的配置；单次发送最多 10 秒，失败后间隔 30、60 秒重试，最多发送 3 次。中断后的投递由每 5 分钟的维护任务恢复。投递采用至少一次语义：发送成功但确认写入前中断时，可能重复，接收端可按 `run.id` 去重。
 
-**通过 cf-sender 发告警**：部署 [cf-sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置 → 全局失败告警」选择「CF Sender」并填写主题，或在任务里选「cf-sender 主题」，告警会以 Markdown 扇出到该主题的飞书、Telegram、邮件等渠道。调用带 `yunji-task:alert:<run.id>` 幂等键，重试不会重复发送。全局告警方式可明确选择 Webhook、CF Sender 或关闭，按所选方式发送；缺少 SENDER 绑定时会明确失败。Webhook 默认提供 [Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md) JSON 模板，推送地址可填写 `https://api.day.app/{{BARK_KEY}}`，并在「变量」中保存 `BARK_KEY`。
+**通过云吉 Sender 发告警**：部署 [云吉 Sender / Yunji Sender](../cf-sender) 后，取消 wrangler.jsonc 里 `services` 一段的注释（绑定名 `SENDER`，服务名 `yunji-sender`，入口 `SenderRpc`），运行 `pnpm cf-typegen` 再部署。之后可以在「设置 → 全局失败告警」选择「云吉 Sender」并填写渠道组标识，或在任务里选「云吉 Sender 渠道组」，告警会以 Markdown 发到该渠道组绑定的渠道。RPC 调用使用 `channelGroup`，带 `yunji-task:alert:<run.id>` 幂等键，重试不会重复发送。全局告警方式可明确选择 Webhook、云吉 Sender 或关闭；缺少 SENDER 绑定时会明确失败。Webhook 默认提供 [Bark](https://github.com/Finb/Bark/blob/master/docs/en-us/tutorial.md) JSON 模板，推送地址可填写 `https://api.day.app/{{BARK_KEY}}`，并在「变量」中保存 `BARK_KEY`。
+
+任务告警配置使用 `{ "mode": "sender", "channelGroup": "ops-alert" }`，全局设置使用 `senderChannelGroup`。已有任务、全局设置和待发送告警中的 `topic` / `senderTopic` 在读取时兼容转换；新接口响应、保存内容与 RPC 统一使用渠道组字段。新旧字段同时提供时，以新字段为准。
 
 **成功判定**：创建或编辑任务时，可以选择简单模式或高级模式。简单模式要求 HTTP 2xx，填写成功关键字后还需响应体包含该字符串。高级模式支持响应码等于／不等于／范围、响应正文等于／包含，以及 JSON 字段的等于、包含、大小比较、存在性判断；多个条件可选「全部满足（AND）」或「任一满足（OR）」。高级模式只按所配置的条件判断，若需要限定 2xx，请保留默认的响应码 200–299 条件。
 

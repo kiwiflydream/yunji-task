@@ -314,21 +314,21 @@ function TaskForm({ id, initial, taskName, version }: { id?: string; initial: Ta
             <Radio.Item label={tr("使用全局设置")} value="inherit" />
             <Radio.Item label={tr("关闭")} value="off" />
             <Radio.Item label={tr("自定义 Webhook")} value="custom" />
-            <Radio.Item label={tr("cf-sender 主题")} value="sender" />
+            <Radio.Item label={tr("云吉 Sender 渠道组")} value="sender" />
           </Radio.Group>
           {f.alertMode === 'sender' && (
             <Input
-              label={tr("主题标识")}
+              label={tr("渠道组标识")}
               className="font-mono"
               placeholder="ops-alert"
-              value={f.alertTopic}
-              onChange={(e) => set('alertTopic', e.target.value)}
+              value={f.alertChannelGroup}
+              onChange={(e) => set('alertChannelGroup', e.target.value)}
               description={
                 me.data && !me.data.senderAvailable
                   ? tr("当前部署没有配置 SENDER 服务绑定，告警会发送失败。见 wrangler.jsonc 的 services。")
-                  : tr("通过 cf-sender 扇出到该主题绑定的所有渠道（飞书、Telegram、邮件等）。")
+                  : tr("通过云吉 Sender 扇出到该渠道组绑定的所有渠道（飞书、Telegram、邮件等）。")
               }
-              {...err('alertTopic')}
+              {...err('alertChannelGroup')}
             />
           )}
           {f.alertMode === 'custom' && (

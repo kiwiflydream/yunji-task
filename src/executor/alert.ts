@@ -1,6 +1,6 @@
 import type { RunTrigger } from '../domain/runs-repo'
 import { getAlertSettings } from '../domain/settings'
-import type { Task } from '../domain/task'
+import { alertSchema, type Task } from '../domain/task'
 import { resolveVariables } from '../domain/variables'
 import { jsonStringEscape, redact, referencedVariables, renderTemplate } from '../lib/template'
 import { senderService } from './sender'
@@ -20,26 +20,28 @@ const ALERT_TIMEOUT_MS = 10_000
 
 export type AlertTarget =
   | { kind: 'webhook'; url: string; bodyTemplate: string }
-  | { kind: 'sender'; topic: string }
+  | { kind: 'sender'; channelGroup: string }
 
 /** Resolve the task override, else the explicitly selected global target. */
 export async function resolveAlertTarget(
   db: D1Database,
   task: AlertTask,
 ): Promise<AlertTarget | null> {
-  if (task.alert.mode === 'off') return null
-  if (task.alert.mode === 'custom') return { kind: 'webhook', url: task.alert.url, bodyTemplate: task.alert.bodyTemplate }
-  if (task.alert.mode === 'sender') return { kind: 'sender', topic: task.alert.topic }
+  // Old queued alert actions may still contain the legacy topic field.
+  const alert = alertSchema.parse(task.alert)
+  if (alert.mode === 'off') return null
+  if (alert.mode === 'custom') return { kind: 'webhook', url: alert.url, bodyTemplate: alert.bodyTemplate }
+  if (alert.mode === 'sender') return { kind: 'sender', channelGroup: alert.channelGroup }
   const global = await getAlertSettings(db)
   if (global.mode === 'off') return null
-  if (global.mode === 'sender') return { kind: 'sender', topic: global.senderTopic }
+  if (global.mode === 'sender') return { kind: 'sender', channelGroup: global.senderChannelGroup }
   return global.url ? { kind: 'webhook', url: global.url, bodyTemplate: global.bodyTemplate } : null
 }
 
 /** The persisted form of a resolved target, so a queued alert keeps the target chosen at failure time. */
 export function targetToAlert(target: AlertTarget): AlertTask['alert'] {
   return target.kind === 'sender'
-    ? { mode: 'sender', topic: target.topic }
+    ? { mode: 'sender', channelGroup: target.channelGroup }
     : { mode: 'custom', url: target.url, bodyTemplate: target.bodyTemplate }
 }
 
@@ -60,7 +62,7 @@ export function defaultAlertPayload(task: AlertTask, run: FailedRun) {
 
 const TRIGGER_LABEL = { schedule: '定时', manual: '手动' } as const
 
-/** Markdown alert for cf-sender; values are inline code so task output cannot inject formatting. */
+/** Markdown alert for Yunji Sender; values are inline code so task output cannot inject formatting. */
 export function senderAlertMessage(task: AlertTask, run: FailedRun) {
   const code = (v: string) => `\`${v.replace(/`/g, "'").replace(/\s+/g, ' ').slice(0, 500)}\``
   return {
@@ -86,9 +88,9 @@ export async function sendFailureAlert(env: CloudflareBindings, task: AlertTask,
   if (!target) return
   if (target.kind === 'sender') {
     const sender = senderService(env)
-    if (!sender) throw new Error('alert targets cf-sender but the SENDER service binding is not configured (see wrangler.jsonc "services")')
-    // The key makes outbox retries safe: cf-sender returns the first message instead of sending again.
-    await sender.send({ topic: target.topic, ...senderAlertMessage(task, run) }, { idempotencyKey: `yunji-task:alert:${run.id}` })
+    if (!sender) throw new Error('alert targets Yunji Sender but the SENDER service binding is not configured (see wrangler.jsonc "services")')
+    // The key makes outbox retries safe: Yunji Sender returns the first message instead of sending again.
+    await sender.send({ channelGroup: target.channelGroup, ...senderAlertMessage(task, run) }, { idempotencyKey: `yunji-task:alert:${run.id}` })
     return
   }
   await sendWebhookAlert(env, target, task, run)

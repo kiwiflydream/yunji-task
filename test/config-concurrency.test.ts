@@ -42,7 +42,7 @@ describe('configuration compare-and-set', () => {
   it('guards both initially absent and existing alert settings, even within one millisecond', async () => {
     const initial = await (await call('/settings/alert')).json() as { version: number }
     expect(initial.version).toBe(0)
-    const original = { mode: 'webhook', url: 'https://original.test', bodyTemplate: '', senderTopic: '' }
+    const original = { mode: 'webhook', url: 'https://original.test', bodyTemplate: '', senderChannelGroup: '' }
     const responses = await Promise.all(['a', 'b'].map(name => call('/settings/alert', 'PUT', { ...original, url: `https://${name}.test` }, 0)))
     expect(responses.map(r => r.status).sort()).toEqual([200, 409])
     const current = await (await call('/settings/alert')).json() as { version: number }

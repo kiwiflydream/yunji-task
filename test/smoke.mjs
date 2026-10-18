@@ -126,7 +126,7 @@ try {
   assert.ok((await fetch(`${base}/__scheduled`)).ok)
   console.log('PASS authentication, encrypted variables, log redaction, alert callback and maintenance')
 
-  await api('/settings/alert', 'PUT', { mode: 'webhook', url: `${destination}/alert`, bodyTemplate: '', senderTopic: '' })
+  await api('/settings/alert', 'PUT', { mode: 'webhook', url: `${destination}/alert`, bodyTemplate: '', senderChannelGroup: '' })
   browser = await chromium.launch({ channel: process.env.E2E_BROWSER_CHANNEL })
   const context = await browser.newContext({ httpCredentials: { username: 'admin', password }, locale: 'en-US', viewport: { width: 1440, height: 1000 } })
   const page = await context.newPage()

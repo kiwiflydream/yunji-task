@@ -32,11 +32,17 @@ export const scheduleSchema = z
     if (err) ctx.addIssue({ code: 'custom', path: ['cron'], message: err })
   })
 
-/** cf-sender topic slug (same rule as cf-sender's topics). */
-export const SENDER_TOPIC_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
-const senderTopicSchema = z.string().trim().regex(SENDER_TOPIC_RE, '主题标识只能包含小写字母、数字、点、下划线和连字符')
+/** Channel-group slug, matching Yunji Sender. */
+export const SENDER_CHANNEL_GROUP_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/
+const senderChannelGroupSchema = z.string().trim().regex(SENDER_CHANNEL_GROUP_RE, '渠道组标识只能包含小写字母、数字、点、下划线和连字符')
 
-export const alertSchema = z.discriminatedUnion('mode', [
+export const alertSchema = z.preprocess((value) => {
+  // Read existing task configs, API clients and persisted outbox snapshots.
+  if (value && typeof value === 'object' && 'topic' in value && !('channelGroup' in value)) {
+    return { ...value, channelGroup: value.topic }
+  }
+  return value
+}, z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('inherit') }),
   z.object({ mode: z.literal('off') }),
   z.object({
@@ -44,9 +50,8 @@ export const alertSchema = z.discriminatedUnion('mode', [
     url: z.string().trim().min(1).max(2048),
     bodyTemplate: z.string().max(8000).default(''),
   }),
-  // Delivered through the cf-sender service binding (SENDER) to a topic.
-  z.object({ mode: z.literal('sender'), topic: senderTopicSchema }),
-])
+  z.object({ mode: z.literal('sender'), channelGroup: senderChannelGroupSchema }),
+]))
 
 export const taskInputSchema = z.object({
   name: z.string().trim().min(1).max(100),
@@ -117,7 +122,7 @@ export function rowToTask(row: TaskRow): Task {
     executor: { type: row.executor_type, config: JSON.parse(row.executor_config) } as ExecutorSpec,
     overlapPolicy: row.overlap_policy,
     retry: { count: row.retry_count, intervalSeconds: row.retry_interval_seconds },
-    alert: JSON.parse(row.alert_config) as AlertConfig,
+    alert: alertSchema.parse(JSON.parse(row.alert_config)),
     executionMode: row.execution_mode,
     version: row.version,
     createdAt: row.created_at,

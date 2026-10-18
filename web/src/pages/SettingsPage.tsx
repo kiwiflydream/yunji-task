@@ -178,7 +178,7 @@ function AlertForm({ initial, senderAvailable }: { initial: VersionedAlertSettin
   useLocale()
 
   const { value: form, setValue: setForm, version, conflict, reset } = useVersionedForm<AlertSettings>({
-    mode: initial.mode, url: initial.url, bodyTemplate: initial.bodyTemplate, senderTopic: initial.senderTopic,
+    mode: initial.mode, url: initial.url, bodyTemplate: initial.bodyTemplate, senderChannelGroup: initial.senderChannelGroup,
   }, initial.version)
   const [error, setError] = useState<string | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<keyof AlertSettings, string>>>({})
@@ -188,7 +188,7 @@ function AlertForm({ initial, senderAvailable }: { initial: VersionedAlertSettin
     mutationFn: () => api.putAlert(form, version),
     onSuccess: (saved) => {
       qc.setQueryData(['alert'], saved)
-      reset({ mode: saved.mode, url: saved.url, bodyTemplate: saved.bodyTemplate, senderTopic: saved.senderTopic }, saved.version)
+      reset({ mode: saved.mode, url: saved.url, bodyTemplate: saved.bodyTemplate, senderChannelGroup: saved.senderChannelGroup }, saved.version)
       setError(null)
       setFieldErrors({})
       toasts.add({ title: tr("告警设置已保存"), variant: 'success' })
@@ -197,7 +197,7 @@ function AlertForm({ initial, senderAvailable }: { initial: VersionedAlertSettin
       const fields: Partial<Record<keyof AlertSettings, string>> = {}
       if (err instanceof ApiError) {
         for (const issue of err.issues) {
-          if (issue.path === 'mode' || issue.path === 'url' || issue.path === 'bodyTemplate' || issue.path === 'senderTopic') {
+          if (issue.path === 'mode' || issue.path === 'url' || issue.path === 'bodyTemplate' || issue.path === 'senderChannelGroup') {
             fields[issue.path] = issue.message
           }
         }
@@ -231,20 +231,20 @@ function AlertForm({ initial, senderAvailable }: { initial: VersionedAlertSettin
             error={localizeIssueMessage(fieldErrors.mode)}
           >
             <Radio.Item label="Webhook" value="webhook" description={tr("默认 Bark，也可自定义其他服务")} />
-            <Radio.Item label="CF Sender" value="sender" description={tr("通过 cf-sender 主题发送到多个渠道")} />
+            <Radio.Item label={tr("云吉 Sender")} value="sender" description={tr("通过云吉 Sender 渠道组发送到多个渠道")} />
             <Radio.Item label={tr("关闭")} value="off" description={tr("关闭跟随全局设置的任务告警")} />
           </Radio.Group>
           {form.mode === 'sender' && (
             <Input
-              label={tr("cf-sender 主题")}
+              label={tr("渠道组标识")}
               className="font-mono"
               placeholder="ops-alert"
-              value={form.senderTopic}
-              onChange={(e) => setForm({ ...form, senderTopic: e.target.value })}
+              value={form.senderChannelGroup}
+              onChange={(e) => setForm({ ...form, senderChannelGroup: e.target.value })}
               description={senderAvailable
-                ? tr("发送到该主题绑定的所有渠道（Bark、飞书、Telegram、邮件等）。")
-                : tr("当前部署未配置 SENDER 服务绑定，发送会失败。请按 wrangler.jsonc 的 services 说明绑定 cf-sender。")}
-              error={localizeIssueMessage(fieldErrors.senderTopic)}
+                ? tr("发送到该渠道组绑定的所有渠道（Bark、飞书、Telegram、邮件等）。")
+                : tr("当前部署未配置 SENDER 服务绑定，发送会失败。请按 wrangler.jsonc 的 services 说明绑定云吉 Sender。")}
+              error={localizeIssueMessage(fieldErrors.senderChannelGroup)}
             />
           )}
           {form.mode === 'webhook' && (

@@ -46,7 +46,7 @@ export interface AlertSettings {
   mode: 'webhook' | 'sender' | 'off'
   url: string
   bodyTemplate: string
-  senderTopic: string
+  senderChannelGroup: string
 }
 
 export const BARK_ALERT_TEMPLATE = JSON.stringify({
@@ -89,7 +89,7 @@ export interface AdminMe extends RuntimeSettings {
   authMode: AdminAuthMode
   /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
   queueAvailable: boolean
-  /** Whether the SENDER (cf-sender) service binding is configured. */
+  /** Whether the SENDER (Yunji Sender) service binding is configured. */
   senderAvailable: boolean
 }
 

@@ -39,7 +39,7 @@ export interface TaskFormState {
   alertMode: AlertMode
   alertUrl: string
   alertBodyTemplate: string
-  alertTopic: string
+  alertChannelGroup: string
   executionMode: TaskExecutionMode
 }
 
@@ -71,7 +71,7 @@ export const emptyTaskForm: TaskFormState = {
   alertMode: 'inherit',
   alertUrl: '',
   alertBodyTemplate: '',
-  alertTopic: '',
+  alertChannelGroup: '',
   executionMode: 'inherit',
 }
 
@@ -105,7 +105,7 @@ export function taskToForm(task: Task): TaskFormState {
     alertMode: task.alert.mode,
     alertUrl: task.alert.mode === 'custom' ? task.alert.url : '',
     alertBodyTemplate: task.alert.mode === 'custom' ? task.alert.bodyTemplate : '',
-    alertTopic: task.alert.mode === 'sender' ? task.alert.topic : '',
+    alertChannelGroup: task.alert.mode === 'sender' ? task.alert.channelGroup : '',
     executionMode: task.executionMode,
   }
 }
@@ -171,7 +171,7 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
         f.alertMode === 'custom'
           ? { mode: 'custom', url: f.alertUrl, bodyTemplate: f.alertBodyTemplate }
           : f.alertMode === 'sender'
-            ? { mode: 'sender', topic: f.alertTopic }
+            ? { mode: 'sender', channelGroup: f.alertChannelGroup }
             : { mode: f.alertMode },
       executionMode: f.executionMode,
     },
@@ -196,7 +196,7 @@ const PATH_TO_FIELD: [prefix: string, field: FormField][] = [
   ['retry.intervalSeconds', 'retryIntervalSeconds'],
   ['alert.url', 'alertUrl'],
   ['alert.bodyTemplate', 'alertBodyTemplate'],
-  ['alert.topic', 'alertTopic'],
+  ['alert.channelGroup', 'alertChannelGroup'],
   ['executionMode', 'executionMode'],
 ]
 

@@ -164,7 +164,7 @@ describe('processRun', () => {
   it('after the last attempt fails, marks failed and sends the templated alert', async () => {
     await putAlertSettings(
       env.DB,
-      { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '{"text":"{{task.name}} #{{run.attempt}}: {{run.error}}"}', senderTopic: '' },
+      { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '{"text":"{{task.name}} #{{run.attempt}}: {{run.error}}"}', senderChannelGroup: '' },
       Date.now(),
     )
     const task = await createTaskRow({ name: 'nightly "sync"', retry: { count: 1, intervalSeconds: 1 } })
@@ -187,7 +187,7 @@ describe('processRun', () => {
   })
 
   it('task alert "off" suppresses the global alert', async () => {
-    await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '', senderTopic: '' }, Date.now())
+    await putAlertSettings(env.DB, { mode: 'webhook', url: 'https://alerts.test/hook', bodyTemplate: '', senderChannelGroup: '' }, Date.now())
     const task = await createTaskRow({ alert: { mode: 'off' } })
     const calls = mockFetch(() => new Response('', { status: 500 }))
     await processRun(message(task.id), envWithQueue().env)
