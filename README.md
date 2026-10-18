@@ -28,12 +28,17 @@ pnpm dev                          # Vite + Worker：http://localhost:5173/admin�
 ```sh
 pnpm test        # vitest，在 workerd 中运行（@cloudflare/vitest-plugin）
 pnpm test:e2e    # 构建后运行浏览器回归测试，使用独立静态服务与模拟 API，不读写本地 D1
+pnpm test:smoke  # 构建后验收真实本地 Worker / D1 / DO / Queue 与后台页面，使用临时数据和密钥
 pnpm typecheck   # Worker、前端、测试三套 tsconfig
 pnpm build       # 产物在 dist/（client 静态资源 + Worker）
 pnpm cf-typegen  # 修改 wrangler.jsonc 后重新生成 worker-configuration.d.ts
 ```
 
 首次运行浏览器测试前执行 `pnpm exec playwright install chromium`；本机已有 Chrome 时，也可直接运行 `E2E_BROWSER_CHANNEL=chrome pnpm test:e2e`。测试默认使用端口 6176，可通过 `E2E_PORT` 调整。
+
+`test:smoke` 也支持 `E2E_BROWSER_CHANNEL=chrome`，无需 Cloudflare 登录。它在独立临时目录应用全部 D1 迁移，验证三种方式的一次性调度、队列失败重试、槽位释放、Webhook 告警、加密变量、日志脱敏、认证、维护任务，以及后台连续保存时的版本条件；结束后停止 Worker 并清除临时状态，不使用项目的 `.dev.vars` 或本地数据库。桌面页面截图保存到系统临时目录中的 `cf-task-full-stack-desktop.png`。
+
+本地验收通过后，正式上线前仍需在目标 Cloudflare 环境核对 D1、Queue、DO、Cron 与密钥绑定，并实际验证调度、重试及告警。本地模拟器和部署 dry-run 不能代替云端验收。
 
 ## 部署
 

@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web && tsc --noEmit -p test",
     "test": "vitest run",
     "test:e2e": "vite build && playwright test",
+    "test:smoke": "vite build && node test/smoke.mjs",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "db:migrate:remote": "wrangler d1 migrations apply DB --remote",
     "build": "vite build",

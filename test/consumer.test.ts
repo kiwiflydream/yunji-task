@@ -288,12 +288,27 @@ describe('queue handler', () => {
 })
 
 describe('orphan scheduler', () => {
+  it('an alarm for a deleted task destroys its DO without waiting for a queue message', async () => {
+    const taskId = crypto.randomUUID()
+    const stub = env.TASK_SCHEDULER.getByName(taskId)
+    await stub.sync({
+      taskId, version: 1, enabled: true, scheduleType: 'cron', cron: '0 0 0 1 1 *',
+      timezone: 'UTC', runAt: null, overlapPolicy: 'skip', leaseMs: 1000, executionMode: 'direct', timeoutMs: 1000,
+    })
+    expect(await runDurableObjectAlarm(stub)).toBe(true)
+    await vi.waitFor(async () => {
+      expect(await stub.status()).toEqual({ version: null, alarmAt: null, running: null })
+    })
+  })
+
   it('a scheduled message for a deleted task destroys its DO', async () => {
     const taskId = crypto.randomUUID()
     const stub = env.TASK_SCHEDULER.getByName(taskId)
     await stub.sync({
-      taskId, version: 1, enabled: true, scheduleType: 'cron', cron: '* * * * * *',
-      timezone: 'UTC', runAt: null, overlapPolicy: 'skip', leaseMs: 1000, executionMode: 'inherit', timeoutMs: 30_000,
+      // Keep the real alarm away from this test's explicit message delivery.
+      // A one-second cron can fire between sync() and status() and destroy the DO first.
+      taskId, version: 1, enabled: true, scheduleType: 'once', cron: null,
+      timezone: 'UTC', runAt: Date.now() + 86_400_000, overlapPolicy: 'skip', leaseMs: 1000, executionMode: 'inherit', timeoutMs: 30_000,
     })
     expect((await stub.status()).alarmAt).not.toBeNull()
     await processRun(message(taskId, { trigger: 'schedule' }), envWithQueue().env)

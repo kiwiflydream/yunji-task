@@ -7,8 +7,9 @@ export function useVersionedForm<T>(initial: T, version: number) {
   const [snapshot, setSnapshot] = useState({ value: initial, baseline: initial, version })
   const dirty = JSON.stringify(snapshot.value) !== JSON.stringify(snapshot.baseline)
 
-  // Synchronize before rendering children. Dirty drafts retain their baseline.
-  if (!dirty && version !== snapshot.version) {
+  // Parent query notifications can lag behind a save acknowledgement. Never
+  // roll back that baseline; only newer remote versions can replace it.
+  if (!dirty && version > snapshot.version) {
     setSnapshot({ value: initial, baseline: initial, version })
   }
 
@@ -20,5 +21,5 @@ export function useVersionedForm<T>(initial: T, version: number) {
     setSnapshot({ value, baseline: value, version: savedVersion })
   }
 
-  return { value: snapshot.value, setValue, version: snapshot.version, conflict: dirty && version !== snapshot.version, reset }
+  return { value: snapshot.value, setValue, version: snapshot.version, conflict: dirty && version > snapshot.version, reset }
 }
