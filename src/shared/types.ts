@@ -89,6 +89,8 @@ export interface AdminMe extends RuntimeSettings {
   authMode: AdminAuthMode
   /** Whether the RUN_QUEUE binding is configured, i.e. tasks may use queue mode. */
   queueAvailable: boolean
+  /** Available service bindings explicitly exposed to RPC tasks. */
+  rpcBindings: string[]
   /** Whether the SENDER (Yunji Sender) service binding is configured. */
   senderAvailable: boolean
 }

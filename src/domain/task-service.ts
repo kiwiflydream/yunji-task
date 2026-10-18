@@ -3,6 +3,7 @@ import type { RunMessage } from './runs-repo'
 import { scheduleSpec, taskInputSchema, toSnapshot, type Task, type TaskInput } from './task'
 import * as repo from './tasks-repo'
 import { effectiveMode, hasRunQueue, runQueue, WORKER_MAX_TIMEOUT_MS } from '../executor/mode'
+import { rpcBindings } from '../executor/rpc'
 import { nextFireTime } from '../lib/schedule'
 
 import type { Issue } from '../shared/types'
@@ -29,6 +30,9 @@ export function zodIssues(error: z.ZodError): Issue[] {
 export async function parseTaskInput(raw: unknown, now: number, env: CloudflareBindings): Promise<TaskInput> {
   const parsed = taskInputSchema.safeParse(raw)
   if (!parsed.success) throw new ValidationError(zodIssues(parsed.error))
+  if (parsed.data.executor.type === 'rpc' && !rpcBindings(env).includes(parsed.data.executor.config.binding)) {
+    throw new ValidationError([{ path: 'executor.config.binding', message: 'RPC 服务绑定不可用，请检查 services 和 RPC_BINDINGS 配置' }])
+  }
   assertRunnable(parsed.data, now)
   const timeoutMs = parsed.data.executor.config.timeoutMs
   const mode = await effectiveMode(env, { executionMode: parsed.data.executionMode, timeoutMs })

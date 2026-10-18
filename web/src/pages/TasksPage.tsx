@@ -21,7 +21,7 @@ export function TasksPage() {
 
   return (
     <>
-      <PageHeader title={tr("任务")} description={tr("按 cron、指定时间或手动触发 HTTP 请求。")} actions={<NewTaskButton />} />
+      <PageHeader title={tr("任务")} description={tr("按 cron、指定时间或手动触发 HTTP 或 RPC 调用。")} actions={<NewTaskButton />} />
       {tasks.isPending ? (
         <PageLoader />
       ) : tasks.isError ? (

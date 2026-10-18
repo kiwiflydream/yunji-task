@@ -139,6 +139,19 @@ function ScheduleCard({ task }: { task: TaskView }) {
 function RequestCard({ task }: { task: TaskView }) {
   useLocale()
 
+  if (task.executor.type === 'rpc') {
+    const cfg = task.executor.config
+    return <Card title={tr("RPC 调用")}><DescriptionList items={[
+      [tr("服务绑定"), <Text variant="mono">{cfg.binding}</Text>],
+      [tr("RPC 方法"), <Text variant="mono">{cfg.method}</Text>],
+      [tr("参数（JSON 数组）"), <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-sm">{JSON.stringify(cfg.args, null, 2)}</pre>],
+      [tr("超时"), tr("{0} 秒", cfg.timeoutMs / 1000)],
+      [tr("成功判定"), cfg.successCondition ? <div className="flex flex-col gap-1">
+        <Text>{cfg.successCondition.match === 'all' ? tr("全部满足（AND）") : tr("任一满足（OR）")}</Text>
+        {cfg.successCondition.rules.map((rule, index) => <Text key={index} variant="mono">{describeLocalizedSuccessRule(rule)}</Text>)}
+      </div> : tr("方法正常返回即成功")],
+    ]} /></Card>
+  }
   const cfg = task.executor.config
   const headers = Object.entries(cfg.headers)
   return (

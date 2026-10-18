@@ -149,3 +149,29 @@ describe('task form mapping', () => {
     expect(other).toEqual([{ path: '', message: 'body must be JSON' }])
   })
 })
+
+describe('RPC task form', () => {
+  it('round-trips RPC arguments and JSON conditions without HTTP-only fields', async () => {
+    const task = await createTaskRow({ executor: { type: 'rpc', config: {
+      binding: 'WEBSITE', method: 'cleanupExpiredSessions', args: [{ batchSize: 100, key: '{{run.id}}' }, 0, false],
+      successCondition: { match: 'all', rules: [{ type: 'json', path: 'deleted', operator: 'gte', value: 0 }] },
+    } } })
+    const f = taskToForm(task)
+    expect(f).toMatchObject({ executorType: 'rpc', rpcBinding: 'WEBSITE', rpcMethod: 'cleanupExpiredSessions', successMode: 'advanced' })
+    const { id, version, createdAt, updatedAt, ...input } = task
+    expect(taskInputSchema.parse(payloadOf(f))).toEqual(input)
+    // Old HTTP draft fields must not leak into RPC configuration or prevent saving.
+    expect(formToPayload({ ...f, headers: [{ key: '', value: 'old' }] })).toHaveProperty('payload')
+  })
+  it.each(['{', '{}', '[null, undefined]', '[1e400]'])('reports invalid RPC arguments %s on the arguments field', (rpcArgs) => {
+    const result = formToPayload(form({ executorType: 'rpc', rpcBinding: 'WEBSITE', rpcMethod: 'cleanup', rpcArgs }))
+    expect(result).toHaveProperty('issues')
+    if ('issues' in result) expect(mapIssues(result.issues).fields.rpcArgs).toBeTruthy()
+  })
+  it('rejects HTTP status conditions for an RPC task', () => {
+    const result = formToPayload(form({ executorType: 'rpc', successMode: 'advanced', successRules: [newSuccessRule('status')] }))
+    expect(result).toHaveProperty('issues')
+    if ('issues' in result) expect(mapIssues(result.issues).fields.successRules).toBeTruthy()
+    expect(mapIssues([{ path: 'executor.config.method', message: 'reserved' }], 'rpc').fields.rpcMethod).toBe('reserved')
+  })
+})

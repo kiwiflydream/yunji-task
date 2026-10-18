@@ -76,7 +76,7 @@ export async function processRun(
   try {
     const names = referencedVariables(...executor.templatedFields(task.executor.config))
     variables = await resolveVariables(env.DB, env.ENCRYPTION_KEY, names)
-    result = await executor.execute(config, variables)
+    result = await executor.execute(config, variables, { env, run: msg })
   } catch (err) {
     result = {
       ok: false,

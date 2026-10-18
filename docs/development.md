@@ -27,7 +27,7 @@ pnpm dev
 | 命令 | 覆盖范围 |
 | --- | --- |
 | `pnpm typecheck` | Worker、前端和测试三套 TypeScript 配置 |
-| `pnpm test` | 在 workerd 中运行 Vitest，包括本地 D1 与 DO 测试 |
+| `pnpm test` | 在 workerd 中运行 Vitest，包括本地 D1、DO 与真实 Worker 间 RPC 测试 |
 | `pnpm test:e2e` | 构建后运行桌面英文、移动端中文浏览器用例，使用模拟 API |
 | `pnpm test:smoke` | 构建后启动独立本地 Worker，验证 D1、DO、Queue、HTTP 回调及后台保存 |
 | `pnpm build` | 构建 Worker 和静态资源，输出到 `dist/` |

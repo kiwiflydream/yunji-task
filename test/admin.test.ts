@@ -66,6 +66,7 @@ describe('basic auth (default mode)', () => {
       executionMode: 'queue',
       queueAvailable: true,
       senderAvailable: false,
+      rpcBindings: ['RPC_TEST'],
     })
   })
 

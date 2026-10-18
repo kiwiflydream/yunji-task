@@ -31,6 +31,7 @@ import { TimezoneSelect } from '../components/TimezoneSelect'
 import { SuccessConditionEditor } from '../components/SuccessConditionEditor'
 import { ErrorBanner, PageLoader } from '../components/States'
 import { MODE_LABEL, suggestionText, WORKER_MAX_TIMEOUT_SECONDS } from '../lib/execution-mode'
+import { newSuccessRule } from '../lib/success-rules'
 import { fmtTime } from '../lib/format'
 import { FORM_CONFLICT_MESSAGE, useVersionedForm } from '../lib/versioned-form'
 import {
@@ -98,7 +99,7 @@ function TaskForm({ id, initial, taskName, version }: { id?: string; initial: Ta
   }
 
   const showIssues = (issues: Issue[]) => {
-    const mapped = mapIssues(issues)
+    const mapped = mapIssues(issues, f.executorType)
     setErrors(mapped.fields)
     setOtherIssues(mapped.other)
   }
@@ -202,7 +203,37 @@ function TaskForm({ id, initial, taskName, version }: { id?: string; initial: Ta
           />
         </Section>
 
-        <Section title={tr("HTTP 请求")} description={tr("URL、请求头和 Body 中可以用 {{变量名}} 引用加密变量。")}>
+        <Section title={tr("任务类型")}>
+          <Radio.Group legend={tr("调用方式")} orientation="horizontal" value={f.executorType}
+            onValueChange={(value) => {
+              const type = value as TaskFormState['executorType']
+              set('executorType', type)
+              set('successMode', 'simple')
+              set('successRules', [newSuccessRule(type === 'rpc' ? 'json' : 'status')])
+              setErrors((previous) => ({ ...previous, successKeyword: undefined, successRules: undefined }))
+            }}>
+            <Radio.Item label={tr("HTTP 请求")} value="http" />
+            <Radio.Item label={tr("RPC 调用")} value="rpc" />
+          </Radio.Group>
+        </Section>
+
+        {f.executorType === 'rpc' ? <Section title={tr("RPC 调用")} description={tr("调用已配置服务绑定的 Worker 方法，参数中的字符串支持 {{变量名}}。")}>
+          <Select label={tr("服务绑定")} value={f.rpcBinding} placeholder={tr("选择服务绑定")}
+            onValueChange={(value) => set('rpcBinding', String(value))} {...err('rpcBinding')}>
+            {(me.data?.rpcBindings ?? []).map((binding) => <Select.Option key={binding} value={binding}>{binding}</Select.Option>)}
+            {f.rpcBinding && !me.data?.rpcBindings?.includes(f.rpcBinding) && <Select.Option value={f.rpcBinding}>{f.rpcBinding}</Select.Option>}
+          </Select>
+          {me.data && !(me.data.rpcBindings?.length) && <Text variant="secondary">{tr("当前没有可用的 RPC 服务。请配置 services 和 RPC_BINDINGS 后重新部署。")}</Text>}
+          <Input label={tr("RPC 方法")} className="font-mono" placeholder="cleanupExpiredSessions" value={f.rpcMethod}
+            onChange={(event) => set('rpcMethod', event.target.value)} {...err('rpcMethod')} />
+          <InputArea label={tr("参数（JSON 数组）")} className="font-mono" rows={6} value={f.rpcArgs}
+            onChange={(event) => set('rpcArgs', event.target.value)} placeholder={'[{"batchSize":100}]'}
+            description={tr("按顺序传入方法参数，无参数填 []。可用 {{run.id}} 作为重试间保持不变的幂等键。")}
+            {...err('rpcArgs')} />
+          <Input label={tr("超时（秒）")} type="number" min={1} max={300} value={f.timeoutSeconds}
+            onChange={(event) => set('timeoutSeconds', event.target.value)} {...err('timeoutSeconds')} />
+          <Text size="sm" variant="secondary">{tr("超时会结束本次等待，不能保证目标方法已停止；目标业务应自行处理幂等。")}</Text>
+        </Section> : <Section title={tr("HTTP 请求")} description={tr("URL、请求头和 Body 中可以用 {{变量名}} 引用加密变量。")}>
           <div className="grid gap-4 sm:grid-cols-[9rem_1fr]">
             <Select
               label={tr("方法")}
@@ -246,7 +277,7 @@ function TaskForm({ id, initial, taskName, version }: { id?: string; initial: Ta
               {...err('timeoutSeconds')}
             />
           </div>
-        </Section>
+        </Section>}
 
         <Section title={tr("成功判定")}>
           <Radio.Group legend={tr("判定模式")} orientation="horizontal" value={f.successMode}
@@ -257,9 +288,9 @@ function TaskForm({ id, initial, taskName, version }: { id?: string; initial: Ta
             <Radio.Item label={tr("简单模式")} value="simple" />
             <Radio.Item label={tr("高级模式")} value="advanced" />
           </Radio.Group>
-          {f.successMode === 'simple' ? <Input label={tr("成功关键字（可选）")} value={f.successKeyword}
+          {f.successMode === 'simple' ? f.executorType === 'rpc' ? <Text variant="secondary">{tr("方法正常返回即成功，抛出异常或超时则失败。可用高级模式判断业务返回值。")}</Text> : <Input label={tr("成功关键字（可选）")} value={f.successKeyword}
             onChange={(e) => set('successKeyword', e.target.value)} description={tr("HTTP 2xx 即成功；填写后还需响应体包含该字符串。")} {...err('successKeyword')} />
-            : <SuccessConditionEditor match={f.successMatch} rules={f.successRules} onMatchChange={(v) => set('successMatch', v)}
+            : <SuccessConditionEditor rpc={f.executorType === 'rpc'} match={f.successMatch} rules={f.successRules} onMatchChange={(v) => set('successMatch', v)}
               onRulesChange={(update) => set('successRules', update)} error={localizeIssueMessage(errors.successRules)} />}
         </Section>
 

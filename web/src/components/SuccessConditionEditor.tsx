@@ -12,12 +12,13 @@ const OPERATORS: Record<SuccessRule['type'], Comparison[]> = {
   json: ['eq', 'ne', 'contains', 'not_contains', 'gt', 'gte', 'lt', 'lte', 'exists', 'not_exists'],
 }
 
-export function SuccessConditionEditor({ match, rules, onMatchChange, onRulesChange, error }: {
+export function SuccessConditionEditor({ match, rules, onMatchChange, onRulesChange, error, rpc = false }: {
   match: 'all' | 'any'
   rules: SuccessRuleForm[]
   onMatchChange: (match: 'all' | 'any') => void
   onRulesChange: (update: (rules: SuccessRuleForm[]) => SuccessRuleForm[]) => void
   error?: string
+  rpc?: boolean
 }) {
   useLocale()
 
@@ -28,7 +29,7 @@ export function SuccessConditionEditor({ match, rules, onMatchChange, onRulesCha
     <div className="flex min-w-0 flex-col gap-4">
       <Select label={tr("条件组合")} value={match} onValueChange={(v) => onMatchChange(v as 'all' | 'any')}
         renderValue={(v) => v === 'all' ? tr("全部满足（AND）") : tr("任一满足（OR）")}
-        description={tr("高级模式只按下列条件判断；需要限定 2xx 时，请保留响应码条件。")}>
+        description={rpc ? tr("根据 RPC 返回值中的 JSON 字段判断业务是否成功。") : tr("高级模式只按下列条件判断；需要限定 2xx 时，请保留响应码条件。")}>
         <Select.Option value="all">{tr("全部满足（AND）")}</Select.Option>
         <Select.Option value="any">{tr("任一满足（OR）")}</Select.Option>
       </Select>
@@ -47,7 +48,7 @@ export function SuccessConditionEditor({ match, rules, onMatchChange, onRulesCha
             <div className="grid min-w-0 gap-3 sm:grid-cols-2">
               <Select label={tr("判断对象")} value={rule.type} renderValue={(v) => tr(TARGETS[v as keyof typeof TARGETS])}
                 onValueChange={(v) => patch(rule.id, { ...newSuccessRule(v as SuccessRule['type']), id: rule.id })}>
-                {Object.entries(TARGETS).map(([value, label]) => <Select.Option key={value} value={value}>{tr(label)}</Select.Option>)}
+                {Object.entries(TARGETS).filter(([value]) => !rpc || value === 'json').map(([value, label]) => <Select.Option key={value} value={value}>{tr(label)}</Select.Option>)}
               </Select>
               <Select key={rule.type} label={tr("比较方式")} value={rule.operator} renderValue={(v) => tr(COMPARISON_LABELS[v as Comparison])}
                 onValueChange={(v) => patch(rule.id, (current) => ({ operator: v as Comparison,
@@ -79,7 +80,7 @@ export function SuccessConditionEditor({ match, rules, onMatchChange, onRulesCha
         )
       })}
       <div><Button type="button" variant="secondary" icon={<PlusIcon />} disabled={rules.length >= 20}
-        onClick={() => onRulesChange((current) => [...current, newSuccessRule()])}>{tr("添加条件")}</Button></div>
+        onClick={() => onRulesChange((current) => [...current, newSuccessRule(rpc ? 'json' : 'status')])}>{tr("添加条件")}</Button></div>
       {error && <Text size="sm" variant="error" role="alert">{error}</Text>}
       <Text size="sm" variant="secondary">{tr("数字 0 与字符串 \"0\" 不相等；包含比较区分大小写，可匹配文本或 JSON 数组中的单个值。字段缺失时，仅“不存在”条件成立；null 视为存在。正文与 JSON 条件要求完整响应不超过 1 MiB，超出后该条条件不成立。最多 20 条。")}</Text>
     </div>

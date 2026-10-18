@@ -1,6 +1,7 @@
 import type { Task, TaskInputRaw } from '../../../src/domain/task'
 import { DEFAULT_TIMEZONE, toDatetimeLocal, zonedTimeToEpoch } from '../../../src/lib/time'
 import type { Issue, TaskExecutionMode } from '../../../src/shared/types'
+import { rpcConfigSchema, type JsonValue } from '../../../src/executor/rpc'
 import { successConditionSchema, type SuccessCondition } from '../../../src/executor/success-condition'
 import { newSuccessRule, successRuleToForm, successRuleToInput, type SuccessRuleForm } from './success-rules'
 
@@ -24,6 +25,10 @@ export interface TaskFormState {
   originalRunAt: number | null
   originalRunAtLocal: string
   originalTimezone: string
+  executorType: 'http' | 'rpc'
+  rpcBinding: string
+  rpcMethod: string
+  rpcArgs: string
   method: string
   url: string
   headers: HeaderRow[]
@@ -56,6 +61,10 @@ export const emptyTaskForm: TaskFormState = {
   originalRunAt: null,
   originalRunAtLocal: '',
   originalTimezone: '',
+  executorType: 'http',
+  rpcBinding: '',
+  rpcMethod: '',
+  rpcArgs: '[]',
   method: 'GET',
   url: '',
   headers: [],
@@ -78,6 +87,8 @@ export const emptyTaskForm: TaskFormState = {
 export function taskToForm(task: Task): TaskFormState {
   const s = task.schedule
   const cfg = task.executor.config
+  const http = task.executor.type === 'http' ? task.executor.config : null
+  const rpc = task.executor.type === 'rpc' ? task.executor.config : null
   const runAt = s.type === 'once' ? toDatetimeLocal(s.runAt, s.timezone) : ''
   return {
     name: task.name,
@@ -90,15 +101,19 @@ export function taskToForm(task: Task): TaskFormState {
     originalRunAt: s.type === 'once' && runAt !== '' ? s.runAt : null,
     originalRunAtLocal: runAt,
     originalTimezone: s.timezone,
-    method: cfg.method,
-    url: cfg.url,
-    headers: Object.entries(cfg.headers).map(([key, value]) => ({ key, value })),
-    body: cfg.body,
+    executorType: task.executor.type,
+    rpcBinding: rpc?.binding ?? '',
+    rpcMethod: rpc?.method ?? '',
+    rpcArgs: JSON.stringify(rpc?.args ?? [], null, 2),
+    method: http?.method ?? 'GET',
+    url: http?.url ?? '',
+    headers: Object.entries(http?.headers ?? {}).map(([key, value]) => ({ key, value })),
+    body: http?.body ?? '',
     timeoutSeconds: String(cfg.timeoutMs / 1000),
-    successKeyword: cfg.successKeyword,
+    successKeyword: http?.successKeyword ?? '',
     successMode: cfg.successCondition ? 'advanced' : 'simple',
     successMatch: cfg.successCondition?.match ?? 'all',
-    successRules: cfg.successCondition?.rules.map(successRuleToForm) ?? [newSuccessRule('status')],
+    successRules: cfg.successCondition?.rules.map(successRuleToForm) ?? [newSuccessRule(rpc ? 'json' : 'status')],
     overlapPolicy: task.overlapPolicy,
     retryCount: String(task.retry.count),
     retryIntervalSeconds: String(task.retry.intervalSeconds),
@@ -131,7 +146,7 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
   } else schedule = { type: 'manual', timezone }
 
   const headers: Record<string, string> = {}
-  f.headers.forEach((h, i) => {
+  if (f.executorType === 'http') f.headers.forEach((h, i) => {
     const key = h.key.trim()
     if (!key && !h.value.trim()) return
     if (!key) issues.push({ path: 'executor.config.headers', message: `第 ${i + 1} 个请求头缺少名称` })
@@ -141,11 +156,20 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
   let successCondition: SuccessCondition | undefined
   if (f.successMode === 'advanced') {
     // Validate before JSON serialization can turn an invalid numeric input (NaN) into null.
-    const parsed = successConditionSchema.safeParse({ match: f.successMatch, rules: f.successRules.map(successRuleToInput) })
+    const conditionSchema = f.executorType === 'rpc' ? rpcConfigSchema.shape.successCondition : successConditionSchema
+    const parsed = conditionSchema.safeParse({ match: f.successMatch, rules: f.successRules.map(successRuleToInput) })
     if (parsed.success) successCondition = parsed.data
     else issues.push(...parsed.error.issues.map((issue) => ({ path: `executor.config.successCondition.${issue.path.join('.')}`, message: issue.message })))
   }
 
+  let args: JsonValue[] = []
+  if (f.executorType === 'rpc') {
+    try {
+      const parsed = rpcConfigSchema.shape.args.safeParse(JSON.parse(f.rpcArgs))
+      if (parsed.success) args = parsed.data
+      else issues.push({ path: 'executor.config.args', message: parsed.error.issues[0].message })
+    } catch { issues.push({ path: 'executor.config.args', message: 'RPC 参数必须是有效的 JSON 数组' }) }
+  }
   if (issues.length) return { issues }
   return {
     payload: {
@@ -153,7 +177,10 @@ export function formToPayload(f: TaskFormState): { payload: TaskInputRaw } | { i
       description: f.description,
       enabled: f.enabled,
       schedule,
-      executor: {
+      executor: f.executorType === 'rpc' ? {
+        type: 'rpc',
+        config: { binding: f.rpcBinding, method: f.rpcMethod, args, timeoutMs: Math.round(num(f.timeoutSeconds) * 1000), ...(successCondition ? { successCondition } : {}) },
+      } : {
         type: 'http',
         config: {
           url: f.url,
@@ -184,8 +211,10 @@ const PATH_TO_FIELD: [prefix: string, field: FormField][] = [
   ['schedule.cron', 'cron'],
   ['schedule.timezone', 'timezone'],
   ['schedule.runAt', 'runAt'],
-  ['executor.config.url', 'url'],
+  ['executor.config.binding', 'rpcBinding'],
   ['executor.config.method', 'method'],
+  ['executor.config.args', 'rpcArgs'],
+  ['executor.config.url', 'url'],
   ['executor.config.headers', 'headers'],
   ['executor.config.body', 'body'],
   ['executor.config.timeoutMs', 'timeoutSeconds'],
@@ -206,11 +235,12 @@ const FIELD_MESSAGES: Partial<Record<FormField, string>> = {
 }
 
 /** Attach server issues to form fields; anything unmatched is returned for a banner. */
-export function mapIssues(issues: Issue[]): { fields: Partial<Record<FormField, string>>; other: Issue[] } {
+export function mapIssues(issues: Issue[], executorType: 'http' | 'rpc' = 'http'): { fields: Partial<Record<FormField, string>>; other: Issue[] } {
   const fields: Partial<Record<FormField, string>> = {}
   const other: Issue[] = []
   for (const issue of issues) {
-    const hit = PATH_TO_FIELD.find(([prefix]) => issue.path === prefix || issue.path.startsWith(prefix + '.'))
+    const mapped = PATH_TO_FIELD.find(([prefix]) => issue.path === prefix || issue.path.startsWith(prefix + '.'))
+    const hit = mapped && executorType === 'rpc' && mapped[1] === 'method' ? [mapped[0], 'rpcMethod'] as const : mapped
     if (hit && !fields[hit[1]]) {
       const ruleIndex = hit[1] === 'successRules' ? issue.path.match(/\.rules\.(\d+)(?:\.|$)/)?.[1] : undefined
       fields[hit[1]] = FIELD_MESSAGES[hit[1]] ?? (ruleIndex === undefined ? issue.message : `第 ${Number(ruleIndex) + 1} 条条件：${issue.message}`)
