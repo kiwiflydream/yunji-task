@@ -1,5 +1,11 @@
 // Chinese source messages are stable translation keys.
 export const en: Record<string, string> = {
+  "执行已紧急暂停，请在设置中恢复后重试。": "Execution is paused. Resume it in Settings before retrying.",
+  "今日执行额度已用完，将在 UTC 00:00（北京时间 08:00）换日后恢复额度。": "The daily execution limit has been reached. Quota resets at 00:00 UTC (08:00 Beijing time).",
+  "已阻止任务递归触发。": "Recursive task triggers are blocked.",
+  "任务创建已达上限：最多保存 1000 个任务，每分钟最多创建 30 个。": "Task creation limit reached: at most 1,000 stored tasks and 30 creations per minute.",
+  "统计正在刷新或查询额度已用完，请一分钟后重试。": "Statistics are refreshing or the query limit has been reached. Retry in one minute.",
+
   "执行安全": "Execution safety",
   "执行安全设置已保存": "Execution safety settings saved",
   "限制每日调用次数；保存后生效，不会重置今天已使用的额度。": "Limit daily calls. Changes take effect when saved without resetting today’s usage.",

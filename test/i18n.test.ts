@@ -92,3 +92,15 @@ describe('translation integrity', () => {
     expect(fmtTime(now, 'Asia/Shanghai')).toBe('2026-10-17 08:00:00')
   })
 })
+
+it('localizes safety API failures without changing unknown server messages', () => {
+  const paused = 'execution paused by safety switch'
+  const exhausted = 'daily execution budget exhausted; resumes after UTC midnight'
+  setLocale('zh-CN')
+  expect(localizeIssueMessage(paused)).toBe('执行已紧急暂停，请在设置中恢复后重试。')
+  expect(localizeIssueMessage(exhausted)).toContain('UTC 00:00（北京时间 08:00）')
+  expect(localizeIssueMessage('unrecognized upstream error')).toBe('unrecognized upstream error')
+  setLocale('en')
+  expect(localizeIssueMessage(paused)).toBe('Execution is paused. Resume it in Settings before retrying.')
+  expect(localizeIssueMessage(exhausted)).toContain('Quota resets at 00:00 UTC')
+})

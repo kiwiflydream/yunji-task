@@ -32,6 +32,13 @@ export function tr(source: string, ...values: unknown[]): string {
 }
 
 const originalMessages = new Map(Object.entries(en).map(([source, translated]) => [translated, source]))
+const apiMessages: Record<string, string> = {
+  "execution paused by safety switch": "执行已紧急暂停，请在设置中恢复后重试。",
+  "daily execution budget exhausted; resumes after UTC midnight": "今日执行额度已用完，将在 UTC 00:00（北京时间 08:00）换日后恢复额度。",
+  "recursive task triggers are blocked": "已阻止任务递归触发。",
+  "task creation limit reached (1000 tasks, 30 creations per minute)": "任务创建已达上限：最多保存 1000 个任务，每分钟最多创建 30 个。",
+  "statistics are refreshing or query budget exhausted; retry in one minute": "统计正在刷新或查询额度已用完，请一分钟后重试。",
+}
 const validationTemplates = [
   '第 {0} 个请求头缺少名称',
   'Worker 异步只支持 {0} 秒以内的超时（当前 {1} 秒）',
@@ -43,7 +50,7 @@ export function localizeIssueMessage(message: string): string
 export function localizeIssueMessage(message: string | undefined): string | undefined
 export function localizeIssueMessage(message: string | undefined): string | undefined {
   if (!message) return message
-  const source = originalMessages.get(message) ?? message
+  const source = apiMessages[message] ?? originalMessages.get(message) ?? message
   if (Object.hasOwn(en, source)) return tr(source)
   const rule = /^第 (\d+) 条条件：(.*)$/s.exec(source)
   if (rule) return tr('第 {0} 条条件：{1}', rule[1], localizeIssueMessage(rule[2]))

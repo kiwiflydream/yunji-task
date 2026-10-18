@@ -11,11 +11,11 @@
 - **灵活调度**：支持秒级 Cron、指定时间执行一次，以及手动或 API 触发，可为任务设置时区。
 - **Worker RPC**：定时调用已绑定 Worker 的公开方法，支持 JSON 参数、返回值条件和执行幂等键。
 - **HTTP 请求**：配置请求方法、请求头、正文和超时，通过状态码、关键字或 JSON 字段判断是否成功。
-- **调用保护**：恢复投递有次数和期限上限，提供共享日额度、递归触发拦截及全局紧急暂停，见[配置说明](docs/execution.md#调用保护与紧急暂停)。
+- **调用保护**：恢复投递有次数和期限上限，默认单任务每天最多 1 万次、全系统每天最多 10 万次，可在「设置 › 执行安全」调整额度或紧急暂停，并拦截递归触发，见[配置说明](docs/execution.md#调用保护与紧急暂停)。
 - **失败处理**：设置重试次数和间隔，选择上次执行未结束时跳过或并行运行。
 - **记录与统计**：查看执行日志、成功率、耗时分布和调度延迟，分别设置日志与统计的保留时间。
 - **失败通知**：通过 Webhook 发送通知，也可接入云吉 Sender，将告警发到指定渠道组。
-- **凭据管理**：加密保存任务变量，在请求和告警中引用；后台支持 Basic 认证或 Cloudflare Access。
+- **凭据管理**：加密保存任务变量，在请求和告警中引用；后台推荐使用 Cloudflare Access 登录，也支持 Basic 认证。
 - **管理界面**：支持简体中文、English、深浅色主题和移动端，也可通过 REST API 管理任务。
 
 ## 快速部署
@@ -50,10 +50,9 @@ pnpm exec wrangler queues create yunji-task-runs-dlq
 
 ### 4. 设置密钥
 
-分别执行以下命令，按提示输入密钥：
+使用推荐的 Cloudflare Access 登录方式时，设置以下两个密钥：
 
 ```sh
-pnpm exec wrangler secret put ADMIN_PASSWORD
 pnpm exec wrangler secret put API_TOKEN
 pnpm exec wrangler secret put ENCRYPTION_KEY
 ```
@@ -62,19 +61,49 @@ pnpm exec wrangler secret put ENCRYPTION_KEY
 
 | 密钥 | 用途 | 设置方式 |
 | --- | --- | --- |
-| `ADMIN_PASSWORD` | 管理后台登录密码 | 设置独立的强密码，默认用户名为 `admin` |
 | `API_TOKEN` | REST API 访问令牌 | 用 `openssl rand -hex 32` 生成 |
 | `ENCRYPTION_KEY` | 加密任务变量 | 用 `openssl rand -base64 32` 生成，并妥善备份 |
 
 `ENCRYPTION_KEY` 丢失或更换后，原有加密变量将无法解密。本地开发使用的 `.dev.vars` 不会自动上传为线上密钥。
 
-### 5. 部署并打开后台
+### 5. 配置后台登录（推荐 Cloudflare Access）
+
+**正式部署推荐使用 Cloudflare Access**，由访问策略限制哪些人可以进入后台。本项目会验证 Access 签发的登录凭证；启用此模式后，无需设置 `ADMIN_PASSWORD`。
+
+1. 在 Cloudflare Zero Trust 中创建 **Self-hosted** 应用，为实际使用的后台域名配置访问规则，覆盖 `/admin` 和所有子路径，包括 `/admin/api/*`。
+2. 设置 Allow 策略，只允许自己的邮箱或指定团队成员，并配置登录方式。
+3. 获取团队域名和该应用的 **Application Audience（AUD）**，修改 [wrangler.jsonc](wrangler.jsonc) 中已有的 `vars` 字段，保留其他配置：
+
+   | 变量 | 值 |
+   | --- | --- |
+   | `ADMIN_AUTH_MODE` | `access` |
+   | `ACCESS_TEAM_DOMAIN` | 团队域名，例如 `myteam.cloudflareaccess.com`，不含 `https://` |
+   | `ACCESS_AUD` | 上述 Access 应用的 AUD tag |
+
+Access 入口策略与应用内配置需要同时完成。仓库为方便本地启动，仍以 `basic` 为默认值；正式部署请按上表切换。创建应用的具体步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/)。
+
+此处的 Access 规则用于后台，`/api/*` 仍通过 `API_TOKEN` 鉴权。如果另行用 Access 保护整个域名，脚本调用 API 也需要满足对应的 Access 策略。
+
+<details>
+<summary>可选：本地开发或临时体验使用 Basic 认证</summary>
+
+保留 `ADMIN_AUTH_MODE=basic`，设置后台密码：
+
+```sh
+pnpm exec wrangler secret put ADMIN_PASSWORD
+```
+
+部署后使用 `ADMIN_USERNAME`（默认 `admin`）和该密码登录。本地开发则在 `.dev.vars` 中设置密码，见[本地开发指南](docs/development.md)。
+
+</details>
+
+### 6. 部署并打开后台
 
 ```sh
 pnpm run deploy
 ```
 
-此命令会构建前后端、应用尚未执行的 D1 迁移，再发布 Worker。部署完成后，打开输出地址的 `/admin`，使用 `admin` 和刚设置的 `ADMIN_PASSWORD` 登录。
+此命令会构建前后端、应用尚未执行的 D1 迁移，再发布 Worker。部署完成后，打开已配置 Access 保护的后台地址，例如 `https://tasks.example.com/admin`，按 Access 页面提示登录。通过访问策略后即可进入系统；若选择了 Basic 方式，则使用配置的用户名和密码登录。
 
 ## 创建第一个任务
 
@@ -84,6 +113,14 @@ pnpm run deploy
 4. 在任务菜单中点击「立即执行」，到任务详情查看执行记录。
 
 需要认证的接口，可先在「变量」页保存令牌，再在请求头中填写 `Authorization: Bearer {{TOKEN_NAME}}`。最终失败后的通知方式可在「设置」页统一配置，也可由任务单独指定。
+
+## 设置执行额度
+
+在「设置 › 执行安全」调整「单任务每日上限」「全系统每日上限」，或选择「紧急暂停」，点击「保存执行安全设置」后生效。默认分别为 **10,000 次／天**、**100,000 次／天**。
+
+派发与实际执行尝试分别计数，分别受上述额度限制；失败和重试也消耗执行额度。每天 UTC 00:00（北京时间 08:00）换日，修改设置不会清零当天已用额度。保存时如提示配置冲突，重新加载最新配置后再修改。
+
+紧急暂停会阻止新派发、尚未开始的执行和告警，但不能撤销已经发出的调用。恢复后，维护会分批重新安排定时调度，被终止的执行不会自动补跑。这些是调用次数限制，不是账单金额封顶；详细行为见[调用保护与紧急暂停](docs/execution.md#调用保护与紧急暂停)。
 
 ## 选择执行方式
 
