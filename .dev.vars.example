@@ -1,6 +1,6 @@
 # Copy to .dev.vars for `pnpm dev`. Never commit .dev.vars.
-# Generate with: openssl rand -hex 32
-API_TOKEN=
+# Optional: uncomment only when calling the REST API. Generate with: openssl rand -hex 32
+# API_TOKEN=
 # openssl rand -base64 32
 ENCRYPTION_KEY=
 # Basic auth password for /admin (username: ADMIN_USERNAME in wrangler.jsonc, default "admin").

@@ -68,11 +68,6 @@
   "vars": {
     // Admin UI auth: "basic" (ADMIN_USERNAME + ADMIN_PASSWORD secret) or "access" (Cloudflare Access).
     "ADMIN_AUTH_MODE": "basic",
-    // Comma-separated service bindings exposed to RPC tasks (e.g. "WEBSITE,SENDER").
-    "RPC_BINDINGS": "",
-    "ADMIN_USERNAME": "admin",
-    // Only used when ADMIN_AUTH_MODE is "access".
-    "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ADMIN_USERNAME": "admin"
   }
 }

@@ -11,7 +11,7 @@ pnpm install
 cp .dev.vars.example .dev.vars
 ```
 
-按照 [.dev.vars.example](../.dev.vars.example) 填写 `API_TOKEN`、`ENCRYPTION_KEY` 和 `ADMIN_PASSWORD`，再启动本地服务：
+按照 [.dev.vars.example](../.dev.vars.example) 填写 `ENCRYPTION_KEY` 和 `ADMIN_PASSWORD`（调用 REST API 时再取消注释并填写 `API_TOKEN`），再启动本地服务：
 
 ```sh
 pnpm db:migrate:local

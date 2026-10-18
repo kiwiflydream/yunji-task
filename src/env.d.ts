@@ -8,3 +8,14 @@ interface CloudflareBindings extends Secrets {}
 declare namespace Cloudflare {
   interface Env extends Secrets {}
 }
+
+// Optional integrations are configured after initial deployment.
+interface OptionalAdminConfig {
+  ACCESS_TEAM_DOMAIN?: string
+  ACCESS_AUD?: string
+  RPC_BINDINGS?: string
+}
+interface CloudflareBindings extends OptionalAdminConfig {}
+declare namespace Cloudflare {
+  interface Env extends OptionalAdminConfig {}
+}

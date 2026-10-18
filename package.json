@@ -19,28 +19,16 @@
   "cloudflare": {
     "bindings": {
       "ADMIN_PASSWORD": {
-        "description": "【Basic 模式必填；Access 模式不使用】Basic 登录密码，用户名由 ADMIN_USERNAME 指定，默认 `admin`。选择 `basic` 时请设置独立强密码；选择 `access` 时应用不使用此密码。"
-      },
-      "API_TOKEN": {
-        "description": "【使用 REST API 时必填；否则可不配置】REST API 访问令牌。用 `openssl rand -hex 32` 生成，请求头格式为 `Authorization: Bearer 你的令牌`。仅在调用 API 的受信任程序中保存，不要公开。"
+        "description": "【必填】后台登录密码，请设置独立强密码。部署后使用 ADMIN_USERNAME（默认 admin）和此密码登录。"
       },
       "ENCRYPTION_KEY": {
-        "description": "【保存加密变量时必填，建议部署时设置】用于加密任务变量，必须是 32 字节随机密钥的 Base64 编码。用 `openssl rand -base64 32` 生成并妥善保存，丢失或更换后已存变量将无法解密。"
+        "description": "【必填】用于加密任务变量，必须是 32 字节随机密钥的 Base64 编码。用 `openssl rand -base64 32` 生成并妥善保存，丢失或更换后已存变量将无法解密。"
       },
       "ADMIN_AUTH_MODE": {
-        "description": "【选填，默认 basic】后台登录方式：正式部署推荐填写 `access`，并配置 Cloudflare Access 应用、访问策略及下方两个 ACCESS 字段。`basic` 适合本地开发或临时体验，需设置 ADMIN_PASSWORD。"
+        "description": "后台登录方式，默认 `basic`，首次部署保留默认即可。部署后可按文档切换为 Cloudflare Access。"
       },
       "ADMIN_USERNAME": {
-        "description": "【选填，保留默认 admin 即可】Basic 登录用户名，默认 `admin`。仅 ADMIN_AUTH_MODE 为 `basic` 时使用；Access 模式下无需修改。"
-      },
-      "ACCESS_TEAM_DOMAIN": {
-        "description": "【Access 模式必填；Basic 模式可留空】仅 Access 模式需要。填写 Cloudflare Zero Trust 团队域名，例如 `myteam.cloudflareaccess.com`，不含 `https://` 或路径。Basic 模式可留空。"
-      },
-      "ACCESS_AUD": {
-        "description": "【Access 模式必填；Basic 模式可留空】仅 Access 模式需要。填写保护本项目后台的 Access 应用的 Application Audience（AUD）tag，可在 Zero Trust 应用详情中找到。Basic 模式可留空。"
-      },
-      "RPC_BINDINGS": {
-        "description": "【选填，不使用 RPC 时留空】可供 RPC 任务调用的 Service Binding 名称，以英文逗号分隔，例如 `WEBSITE,SENDER`。只使用 HTTP 任务时留空；填写名称不会自动创建绑定，还需在 wrangler.jsonc 的 services 中配置对应 Worker。"
+        "description": "后台登录用户名，默认 `admin`，可直接保留。"
       }
     }
   },
